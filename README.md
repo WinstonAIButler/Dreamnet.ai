@@ -220,6 +220,24 @@ It is built for one person. If you host it anywhere other than your own
 computer, put it behind HTTPS, set a strong `ADMIN_PASSWORD`, and don't create
 other accounts.
 
+## Put it online (just for you)
+
+`render.yaml` sets Dreamnet up on [Render](https://render.com) so you can open
+it from any browser, including your phone, signed in as `admin`:
+
+1. Sign in to Render with GitHub and add a payment card (the Starter plan
+   plus a 1 GB disk, about $7.25 a month).
+2. Click **New → Blueprint**, pick this repository, and click **Connect**.
+3. Paste your `FEATHERLESS_API_KEY` and choose an `ADMIN_PASSWORD` (8+
+   characters), then click **Apply**.
+4. When it says **Live**, open the `onrender.com` address it shows and sign in.
+
+Everything you make is kept on the attached disk (`/var/data`), so it survives
+restarts and updates, and nothing, pictures included, is shown without signing
+in. Sign-in is locked for 15 minutes after 10 wrong passwords. Portraits from
+ComfyUI and VoiceStudio voices need those programs on your computer, so they
+don't work on the online copy; the built-in read-aloud voices do.
+
 ## How it's built
 
 | Part | Where it came from |

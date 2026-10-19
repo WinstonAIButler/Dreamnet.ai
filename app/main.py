@@ -5,6 +5,7 @@ panels) plus the private Dreamnet writing studio served at /.
 """
 import os
 import logging
+import time
 
 # Load .env before the app modules read their settings at import time.
 try:
@@ -42,6 +43,9 @@ PORT = int(os.getenv("PORT", "8080"))
 DATABASE_PATH = os.getenv("DATABASE_PATH", "proxy.db")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "32768"))
 PROMOTE_AFTER_SECONDS = float(os.getenv("PROMOTE_AFTER_SECONDS", "120"))
+# Set to 1 when Dreamnet runs on a public host (render.yaml does this): it then
+# refuses a default admin password and only sends the login cookie over HTTPS.
+HOSTED = os.getenv("DREAMNET_HOSTED", "") == "1"
 
 import app.database as database
 database.DB_PATH = DATABASE_PATH
@@ -78,6 +82,8 @@ async def lifespan(app: FastAPI):
     users = await list_users(DATABASE_PATH)
     if not users:
         admin_pw = os.getenv("ADMIN_PASSWORD", "admin")
+        if HOSTED and (len(admin_pw) < 8 or admin_pw in ("admin", "change-me")):
+            raise RuntimeError("Set ADMIN_PASSWORD to a password of at least 8 characters before putting Dreamnet online.")
         await create_user(DATABASE_PATH, "admin", hash_password(admin_pw), is_admin=1, credits=0, credit_limit=0)
         logger.info("Created default admin user 'admin' (set ADMIN_PASSWORD to change the default)")
 
@@ -100,6 +106,16 @@ app = FastAPI(title="Dreamnet.ai", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 _studio.portraits.PORTRAIT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/portraits", StaticFiles(directory=str(_studio.portraits.PORTRAIT_DIR)), name="portraits")
+
+
+@app.middleware("http")
+async def private_pictures(request: Request, call_next):
+    # Portraits and scene pictures are private: only a signed-in session sees them.
+    if request.url.path.startswith("/portraits/"):
+        if not await get_session_from_request(DATABASE_PATH, request):
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    return await call_next(request)
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # Register routers
@@ -111,14 +127,33 @@ app.include_router(studio_router)
 
 # --- Auth routes ---
 
+# Failed sign-ins per username, so a password can't be guessed over the internet.
+LOGIN_MAX_FAILURES = 10
+LOGIN_WINDOW_SECONDS = 15 * 60
+_login_failures: dict[str, list[float]] = {}
+
+
+def _recent_failures(username: str) -> list[float]:
+    cutoff = time.time() - LOGIN_WINDOW_SECONDS
+    recent = [t for t in _login_failures.get(username, []) if t > cutoff]
+    if recent:
+        _login_failures[username] = recent
+    else:
+        _login_failures.pop(username, None)
+    return recent
+
 @app.post("/api/login")
 async def login(request: Request):
     body = await request.json()
     username = body.get("username", "")
     password = body.get("password", "")
+    if len(_recent_failures(username)) >= LOGIN_MAX_FAILURES:
+        return JSONResponse({"error": "Too many wrong passwords. Try again in 15 minutes."}, status_code=429)
     user = await get_user_by_username(DATABASE_PATH, username)
     if not user or not verify_password(password, user["password_hash"]):
+        _login_failures.setdefault(username, []).append(time.time())
         return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+    _login_failures.pop(username, None)
     if not user["enabled"]:
         return JSONResponse({"error": "Account disabled"}, status_code=403)
     # Transparently upgrade legacy/low-cost password hashes on successful login.
@@ -127,7 +162,7 @@ async def login(request: Request):
         await update_user(DATABASE_PATH, user["id"], password_hash=hash_password(password))
     token = await create_session(DATABASE_PATH, user["id"], user["username"], user["is_admin"])
     resp = JSONResponse({"ok": True, "is_admin": bool(user["is_admin"]), "username": user["username"]})
-    resp.set_cookie("session", token, httponly=True, max_age=86400, samesite="lax")
+    resp.set_cookie("session", token, httponly=True, max_age=86400, samesite="lax", secure=HOSTED)
     return resp
 
 
