@@ -64,8 +64,12 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   penthouse").
 - **Read aloud.** Each character has a voice: pick a country (United States,
   United Kingdom, Australia, Canada, Ireland, New Zealand, South Africa, India,
-  Singapore, the Philippines, Nigeria, Kenya, Tanzania, Hong Kong), a male or
-  female voice from that country, a tone (deep, low, natural, bright) and a
+  Singapore, the Philippines, Nigeria, Kenya, Tanzania, Hong Kong), or a
+  European country for English with that accent (France, Germany, Italy,
+  Spain, Portugal, the Netherlands, Austria, Switzerland, Sweden, Norway,
+  Denmark, Finland, Poland, Czech Republic, Hungary, Romania, Greece, Russia,
+  Ukraine), then a male or female voice from that country (voices marked
+  "smoothest English" are the most fluent), a tone (deep, low, natural, bright) and a
   speed. Press **Listen** on any reply, or turn on auto-read with the 🔊 button.
   Choose whether to read everything, spoken words and thoughts, or spoken words
   only. All voices are English. They use Microsoft Edge's online Read Aloud
@@ -75,7 +79,7 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   [VoiceStudio](https://github.com/debpalash/VoiceStudio) on your computer, set a
   character's voice engine to **VoiceStudio on this computer**. By default the
   character gets a voice designed from their gender, age, tone and country
-  (American, British, Canadian, Australian or Indian accent), and it's the same
+  (American, British, Canadian, Australian, Indian, Russian or Portuguese accent), and it's the same
   voice every time. Their private `thoughts` are whispered. You can also pick
   any voice you designed or cloned in VoiceStudio. It runs offline on your own
   hardware. If VoiceStudio isn't running, the online voice reads instead.

@@ -137,8 +137,14 @@
       var regionSel = form.voice_region, voiceSel = form.voice;
       var current = c.voice || (info.defaults || {})[form.gender.value] || "en-US-AvaNeural";
       var curRegion = current.indexOf("device:") === 0 ? (deviceVoices().filter(function (v) { return v.name === current.slice(7); })[0] || { lang: "en-US" }).lang.replace("_", "-").slice(0, 5) : current.slice(0, 5);
-      regionSel.innerHTML = info.regions.map(function (r) {
-        return '<option value="' + r[0] + '"' + (r[0] === curRegion ? " selected" : "") + ">" + esc(r[1]) + "</option>"; }).join("");
+      function regionOpts(list) {
+        return list.map(function (r) {
+          return '<option value="' + r[0] + '"' + (r[0] === curRegion ? " selected" : "") + ">" + esc(r[1]) + "</option>"; }).join("");
+      }
+      var eng = info.regions.filter(function (r) { return r[0].indexOf("en-") === 0; });
+      var eur = info.regions.filter(function (r) { return r[0].indexOf("en-") !== 0; });
+      regionSel.innerHTML = '<optgroup label="English-speaking countries">' + regionOpts(eng) + "</optgroup>" +
+        (eur.length ? '<optgroup label="Europe (English with that accent)">' + regionOpts(eur) + "</optgroup>" : "");
       function fill() {
         var reg = regionSel.value, groups = { male: [], female: [] };
         info.voices.forEach(function (v) { if (v.region === reg) groups[v.gender].push(v); });
@@ -174,7 +180,7 @@
         document.getElementById("vsNote").textContent = !vsInfo.online
           ? "VoiceStudio isn't running at " + vsInfo.url + ". Start it and reload; until then the backup voice reads."
           : profSel.value ? "Uses this voice from VoiceStudio. Country and tone don't change it; speed does."
-          : "Designed from gender, age, tone and country, and the same every time. Thoughts are whispered. Accents: American, British, Canadian, Australian or Indian, the closest to the country.";
+          : "Designed from gender, age, tone and country, and the same every time. Thoughts are whispered. Accents: American, British, Canadian, Australian, Indian, Russian or Portuguese, the closest to the country. For another European accent, clone or design one in VoiceStudio and pick it above.";
       }
       form.voice_engine.onchange = showEngine; profSel.onchange = showEngine; showEngine();
       function showRate() { var r = +form.voice_rate.value; document.getElementById("rateShow").textContent = r === 0 ? "normal" : (r > 0 ? "+" : "") + r + "%"; }

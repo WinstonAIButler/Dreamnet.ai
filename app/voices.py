@@ -27,13 +27,22 @@ VOICESTUDIO_API_KEY = os.getenv("VOICESTUDIO_API_KEY", "")
 VOICESTUDIO_TIMEOUT = float(os.getenv("VOICESTUDIO_TIMEOUT", "300"))
 ENGINES = ("edge", "voicestudio")
 
-# English-speaking voices only, by country. Ids are Edge voice names.
+# Every voice reads English. English-speaking countries use their own English
+# voices; European countries use that country's voices reading the English text,
+# which gives English with that accent. "Multilingual" voices are the smoothest.
+# Ids are Edge voice names.
 REGIONS = [
     ("en-US", "United States"), ("en-GB", "United Kingdom"), ("en-AU", "Australia"), ("en-CA", "Canada"),
     ("en-IE", "Ireland"), ("en-NZ", "New Zealand"), ("en-ZA", "South Africa"), ("en-IN", "India"),
     ("en-SG", "Singapore"), ("en-PH", "Philippines"), ("en-NG", "Nigeria"), ("en-KE", "Kenya"),
     ("en-TZ", "Tanzania"), ("en-HK", "Hong Kong"),
+    ("fr-FR", "France"), ("de-DE", "Germany"), ("it-IT", "Italy"), ("es-ES", "Spain"), ("pt-PT", "Portugal"),
+    ("nl-NL", "Netherlands"), ("de-AT", "Austria"), ("de-CH", "Switzerland"), ("sv-SE", "Sweden"),
+    ("nb-NO", "Norway"), ("da-DK", "Denmark"), ("fi-FI", "Finland"), ("pl-PL", "Poland"),
+    ("cs-CZ", "Czech Republic"), ("hu-HU", "Hungary"), ("ro-RO", "Romania"), ("el-GR", "Greece"),
+    ("ru-RU", "Russia"), ("uk-UA", "Ukraine"),
 ]
+EUROPE = {loc for loc, _ in REGIONS if not loc.startswith("en-")}
 _VOICES = {
     "en-US": [("Andrew", "male"), ("Brian", "male"), ("Christopher", "male"), ("Eric", "male"), ("Guy", "male"),
               ("Roger", "male"), ("Steffan", "male"),
@@ -51,8 +60,30 @@ _VOICES = {
     "en-KE": [("Chilemba", "male"), ("Asilia", "female")],
     "en-TZ": [("Elimu", "male"), ("Imani", "female")],
     "en-HK": [("Sam", "male"), ("Yan", "female")],
+    "fr-FR": [("RemyMultilingual", "male"), ("Henri", "male"), ("VivienneMultilingual", "female"), ("Denise", "female"),
+              ("Eloise", "female")],
+    "de-DE": [("FlorianMultilingual", "male"), ("Conrad", "male"), ("Killian", "male"),
+              ("SeraphinaMultilingual", "female"), ("Katja", "female"), ("Amala", "female")],
+    "it-IT": [("GiuseppeMultilingual", "male"), ("Diego", "male"), ("Isabella", "female"), ("Elsa", "female")],
+    "es-ES": [("Alvaro", "male"), ("Elvira", "female"), ("Ximena", "female")],
+    "pt-PT": [("Duarte", "male"), ("Raquel", "female")],
+    "nl-NL": [("Maarten", "male"), ("Colette", "female"), ("Fenna", "female")],
+    "de-AT": [("Jonas", "male"), ("Ingrid", "female")],
+    "de-CH": [("Jan", "male"), ("Leni", "female")],
+    "sv-SE": [("Mattias", "male"), ("Sofie", "female")],
+    "nb-NO": [("Finn", "male"), ("Pernille", "female")],
+    "da-DK": [("Jeppe", "male"), ("Christel", "female")],
+    "fi-FI": [("Harri", "male"), ("Noora", "female")],
+    "pl-PL": [("Marek", "male"), ("Zofia", "female")],
+    "cs-CZ": [("Antonin", "male"), ("Vlasta", "female")],
+    "hu-HU": [("Tamas", "male"), ("Noemi", "female")],
+    "ro-RO": [("Emil", "male"), ("Alina", "female")],
+    "el-GR": [("Nestoras", "male"), ("Athina", "female")],
+    "ru-RU": [("Dmitry", "male"), ("Svetlana", "female")],
+    "uk-UA": [("Ostap", "male"), ("Polina", "female")],
 }
-VOICES = [{"id": f"{loc}-{name}Neural", "name": name, "gender": g, "region": loc}
+VOICES = [{"id": f"{loc}-{name}Neural", "gender": g, "region": loc,
+           "name": name.replace("Multilingual", "") + (" (smoothest English)" if "Multilingual" in name else "")}
           for loc, _ in REGIONS for name, g in _VOICES[loc]]
 VOICE_IDS = {v["id"] for v in VOICES}
 
@@ -61,10 +92,14 @@ VOICE_IDS = {v["id"] for v in VOICES}
 TONES = {"deep": "-14Hz", "low": "-7Hz", "natural": "+0Hz", "bright": "+8Hz"}
 DEFAULT_VOICE = {"male": "en-US-AndrewNeural", "female": "en-US-AvaNeural", "non-binary": "en-GB-SoniaNeural"}
 
-# VoiceStudio's voice-design tags (omnivoice/utils/voice_design.py). It has five
-# English accents that fit our countries; the rest use the closest one.
+# VoiceStudio's voice-design tags (omnivoice/utils/voice_design.py). Its accents
+# that fit our countries are American, British, Canadian, Australian, Indian,
+# Russian and Portuguese; the rest use the closest one. For any other European
+# accent, clone or design a voice in VoiceStudio and pick it as the saved voice.
 VS_ACCENT = {"en-US": "american accent", "en-CA": "canadian accent", "en-AU": "australian accent",
-             "en-NZ": "australian accent", "en-IN": "indian accent", "en-PH": "american accent"}
+             "en-NZ": "australian accent", "en-IN": "indian accent", "en-PH": "american accent",
+             "ru-RU": "russian accent", "uk-UA": "russian accent", "pt-PT": "portuguese accent",
+             "es-ES": "portuguese accent"}
 VS_PITCH = {"deep": "very low pitch", "low": "low pitch", "natural": "moderate pitch", "bright": "high pitch"}
 
 

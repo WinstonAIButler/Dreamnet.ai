@@ -3,7 +3,7 @@
    network-first, so updates show up right away; API calls are never cached,
    so your writing always comes straight from the server. */
 
-const CACHE = "dreamnet-shell-v15";
+const CACHE = "dreamnet-shell-v16";
 const SHELL = [
   "/",
   "/static/dreamnet/app.css?v=4",
