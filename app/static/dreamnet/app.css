@@ -194,7 +194,8 @@ main { flex: 1; width: 100%; max-width: 1240px; margin: 0 auto; padding: 24px; }
   .hero h1 { font-size: 32px; }
   .hero-stack { display: none; }
   .create { grid-template-columns: 1fr; }
-  .create .preview { position: static; max-width: 240px; }
+  .create .preview { position: static; max-width: 420px; }
+  .create .preview .card { max-width: 240px; }
   .chat-layout { grid-template-columns: 1fr; height: calc(100vh - 110px); }
   .chat-layout .sidebar { display: none; }
   .msg { max-width: 92%; }
@@ -743,3 +744,6 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
 /* Portrait upload: the file input hides inside a button-styled label. */
 .portrait label.btn { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; cursor: pointer; margin: 0; }
 .portrait .row { flex-wrap: wrap; gap: 10px; }
+.create .preview .portrait { margin-top: 16px; }
+.create .preview .portrait .btn { width: 100%; justify-content: center; }
+.create .preview .portrait textarea { width: 100%; }
