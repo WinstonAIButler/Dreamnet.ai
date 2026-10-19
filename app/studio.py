@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
+import app.places as places
 import app.portraits as portraits
 import app.profile as profiles
 import app.voices as voices
@@ -126,6 +127,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     summary TEXT NOT NULL DEFAULT '',           -- rolling "story so far" of older turns
     summarized_upto INTEGER NOT NULL DEFAULT 0, -- last message id folded into summary
     time_rules TEXT NOT NULL DEFAULT '',        -- JSON list of extra or overriding actions for this scene
+    location TEXT NOT NULL DEFAULT '',          -- where the scene starts
+    situation TEXT NOT NULL DEFAULT '',         -- what's happening as it starts (optional)
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -418,6 +421,9 @@ async def init_studio_db(db_path: str):
             await db.execute("ALTER TABLE conversations ADD COLUMN time_rules TEXT NOT NULL DEFAULT ''")
         if "storyline_id" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN storyline_id INTEGER")
+        if "location" not in cols:
+            await db.execute("ALTER TABLE conversations ADD COLUMN location TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE conversations ADD COLUMN situation TEXT NOT NULL DEFAULT ''")
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(memories)")).fetchall()]
         if "storyline_id" not in cols:
             await db.execute("ALTER TABLE memories ADD COLUMN storyline_id INTEGER")
@@ -1384,12 +1390,53 @@ async def start_conversation(request: Request, s: dict = Depends(_session)):
             start = await _storyline_clock(storyline_id) or datetime.now()
     except ValueError:
         return _err(400, "That story start time isn't a valid date and time.")
-    cv = await _exec("INSERT INTO conversations (character_id, novel_id, storyline_id, created_at, updated_at) "
-                     "VALUES (?,?,?,?,?)", (c["id"], novel_id, storyline_id, now, now))
+    location = " ".join(str(body.get("location") or "").split())[:300]
+    situation = " ".join(str(body.get("situation") or "").split())[:600]
+    if mentions_minor(location + " " + situation, strict=True):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    cv = await _exec("INSERT INTO conversations (character_id, novel_id, storyline_id, location, situation, "
+                     "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                     (c["id"], novel_id, storyline_id, location, situation, now, now))
     await _exec("UPDATE storylines SET updated_at = ? WHERE id = ?", (now, storyline_id))
+    opening = c["greeting"]
+    if location or situation:
+        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                    (cv, "mark", "Starts at: " + (location or situation), _iso(start), now))
+        opening = await _opening(s, c, storyline_id, location, situation, start) or opening
     await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
-                (cv, "assistant", c["greeting"], _iso(start), now))
+                (cv, "assistant", opening, _iso(start), now))
     return JSONResponse({"id": cv})
+
+
+@router.get("/places")
+async def list_places(character_id: int = 0, s: dict = Depends(_session)):
+    c = await _row("SELECT * FROM characters WHERE id = ?", (character_id,)) if character_id else None
+    return JSONResponse({"groups": places.catalog(c)})
+
+
+async def _opening(s: dict, c: dict, storyline_id: int, location: str, situation: str, start: datetime) -> str:
+    """The character's first message, set at the chosen place. Empty if the model can't write one."""
+    story = await _row("SELECT * FROM storylines WHERE id = ?", (storyline_id,))
+    system = (f"You are {c['name']}, a {c['age']}-year-old {c['gender']} character in an interactive dark romance "
+              f"role-play with {s['username']}. " + LIFELIKE_RULES + "\n\n"
+              f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
+              + profiles.for_prompt(profiles.clean(c["profile"]), c["name"], s["username"])
+              + (f"\nStoryline: {story['title']}" + (f". {story['premise']}" if story["premise"] else "") + "\n"
+                 if story else "")
+              + f"\nYour usual opening line, for your voice only: {c['greeting']}\n\n" + SAFETY_RULES)
+    ask = (f"Write {c['name']}'s opening message for a new scene. Place: {location or 'your choice'}. "
+           f"Time: {_clock_text(_iso(start))}, {_daypart(start)}. "
+           + (f"What's happening: {situation}. " if situation else "")
+           + f"Set the scene through {c['name']}'s senses and actions, then give {s['username']} something to "
+           "answer. 1 to 2 paragraphs. Never speak or act for the user. Write spoken words in \"double quotes\", "
+           "actions in *asterisks* and private thoughts in `backticks`. No time tags, no preamble.")
+    try:
+        text = (await _complete(s["user_id"], [{"role": "system", "content": system},
+                                               {"role": "user", "content": ask}], 0.9, 450)).strip()
+    except Exception:
+        return ""
+    text = _TIME_TAG.sub("", text).strip()
+    return text if len(text) > 20 and not mentions_minor(text) else ""
 
 
 @router.get("/conversations/{conv_id}")
@@ -1573,7 +1620,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         f"You are {c['name']}, a {c['age']}-year-old {c['gender']} character in an interactive dark romance "
         f"role-play with {s['username']}. Stay in character. Write only {c['name']}'s replies, 1 to 3 paragraphs, and never speak or act for the user. "
         "Format every reply the same way: spoken words in \"double quotes\", actions and body language in "
-        "*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
+        f"*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
         "`She has no idea.` \"You should go.\" " + LIFELIKE_RULES + " Dark themes, tension "
         "and explicit adult content between consenting adult characters are allowed in this private story.\n\n"
         f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
@@ -1585,6 +1632,10 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     story = await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],))
     if story:
         system += f"\nStoryline: {story['title']}" + (f". {story['premise']}" if story["premise"] else "") + "\n"
+    if cv["location"] or cv["situation"]:
+        system += ("\nThis scene began " + (f"at: {cv['location']}." if cv["location"] else "") +
+                   (f" Situation: {cv['situation']}" if cv["situation"] else "") +
+                   " Keep the place's details consistent; people can move elsewhere as the story goes.\n")
     # User-written memories always go in; the newest automatic ones fill the rest.
     mems = await _rows("""SELECT * FROM (SELECT content, said_at, story_time, created_at, source, id FROM memories
                           WHERE character_id = ? AND (storyline_id = ? OR storyline_id IS NULL)

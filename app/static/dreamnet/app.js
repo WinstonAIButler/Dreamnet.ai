@@ -176,7 +176,7 @@
   if (window.speechSynthesis) speechSynthesis.onvoiceschanged = function () { /* list fills in later on some browsers */ };
 
   function voiceSection(c) {
-    var vs = c.voice_engine === "voicestudio", usePreset = !!parseStyle(c.voice_style) || !c.id;
+    var vs = c.voice_engine === "voicestudio", usePreset = !!parseStyle(c.voice_style) || (!c.id && !c.name);
     return '<fieldset class="voice-box"><legend>Voice <span class="hint">how ' + esc(c.name || "they") + ' sound when replies are read aloud</span></legend>' +
       '<div class="two"><label>Engine<select name="voice_engine">' +
         '<option value="edge"' + (vs ? "" : " selected") + '>Online voices (Microsoft Edge)</option>' +
@@ -279,6 +279,76 @@
           style: formStyle(form) });
       };
     });
+  }
+
+  // "Where does it start?" Picks a place (and optionally what's happening) for a new scene.
+  // create(extra) makes the scene with {location, situation} added and resolves to {id}.
+  function pickStart(o) {
+    var dlg = document.createElement("dialog");
+    dlg.className = "start-dlg";
+    dlg.innerHTML = '<form method="dialog" class="start-form form">' +
+      '<div class="start-head"><h2>Where does it start?</h2><button type="button" class="x" data-close title="Close">×</button></div>' +
+      (o.who ? '<p class="hint">A new scene with ' + esc(o.who) + ". Pick a place or write your own; " + esc(o.who) + " opens the scene there.</p>" : "") +
+      (o.resume ? '<button type="button" class="btn small ghost wide" data-resume>↩ Continue your last scene instead</button>' : "") +
+      '<input type="search" class="start-search" placeholder="Search places" aria-label="Search places">' +
+      '<div class="start-groups"><p class="hint">Loading places…</p></div>' +
+      '<label>Place<input name="location" maxlength="300" placeholder="Pick one above, or write your own: a rooftop in Prague, his study, a burning church…"></label>' +
+      '<label>What\'s happening <span class="hint">optional</span><textarea name="situation" rows="2" maxlength="600" placeholder="He just caught you going through his desk."></textarea></label>' +
+      '<div class="row start-actions"><button type="button" class="btn small ghost" data-surprise>🎲 Surprise me</button>' +
+      '<button type="button" class="btn small ghost" data-skip>Use their usual opening</button>' +
+      '<button type="submit" class="btn primary" data-go>Start scene</button></div></form>';
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    var form = dlg.querySelector("form"), all = [];
+    function close() {
+      window.removeEventListener("hashchange", close);
+      if (dlg.open) dlg.close();
+      dlg.remove();
+    }
+    window.addEventListener("hashchange", close);  // leaving the page closes it
+    api("/app/api/places" + (o.characterId ? "?character_id=" + o.characterId : "")).then(function (r) {
+      dlg.querySelector(".start-groups").innerHTML = r.groups.map(function (g) {
+        return '<div class="start-group"><h4>' + esc(g.group) + '</h4><div class="start-tiles">' + g.places.map(function (p) {
+          all.push(p.place);
+          return '<button type="button" class="start-tile" data-place="' + esc(p.place) + '"><span class="em">' + p.emoji + "</span><span>" + esc(p.place) + "</span></button>";
+        }).join("") + "</div></div>";
+      }).join("");
+    }).catch(function () { dlg.querySelector(".start-groups").innerHTML = ""; });
+    function choose(place) {
+      form.location.value = place;
+      dlg.querySelectorAll(".start-tile").forEach(function (t) { t.classList.toggle("on", t.dataset.place === place); });
+    }
+    function go(extra) {
+      var btn = dlg.querySelector("[data-go]");
+      btn.disabled = true; btn.textContent = extra.location || extra.situation ? "Writing the opening…" : "Starting…";
+      o.create(extra).then(function (r) { close(); location.hash = "#/chat/" + r.id; })
+        .catch(function (err) { btn.disabled = false; btn.textContent = "Start scene"; toast(err.message, true); });
+    }
+    dlg.querySelector(".start-search").oninput = function () {
+      var q = this.value.trim().toLowerCase();
+      dlg.querySelectorAll(".start-tile").forEach(function (t) { t.hidden = q && t.dataset.place.toLowerCase().indexOf(q) < 0; });
+      dlg.querySelectorAll(".start-group").forEach(function (g) { g.hidden = !g.querySelector(".start-tile:not([hidden])"); });
+    };
+    dlg.onclick = function (e) {
+      if (e.target === dlg) return close();
+      var b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.place) choose(b.dataset.place);
+      else if (b.hasAttribute("data-close")) close();
+      else if (b.hasAttribute("data-surprise") && all.length) choose(all[Math.floor(Math.random() * all.length)]);
+      else if (b.hasAttribute("data-skip")) go({});
+      else if (b.hasAttribute("data-resume")) { close(); location.hash = "#/chat/" + o.resume; }
+    };
+    dlg.addEventListener("cancel", function (e) { e.preventDefault(); close(); });
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      go({ location: form.location.value.trim(), situation: form.situation.value.trim() });
+    };
+  }
+  function newScene(body, who, extraOpts) {
+    pickStart(Object.assign({ who: who, characterId: body.character_id, create: function (extra) {
+      return api("/app/api/conversations", { method: "POST", body: Object.assign({ new: true }, body, extra) });
+    } }, extraOpts || {}));
   }
 
   function api(path, opts) {
@@ -469,7 +539,8 @@
   var routes = [
     [/^#?\/?$/, viewHome],
     [/^#\/characters$/, viewCharacters],
-    [/^#\/character\/new$/, function () { viewCharacterForm(null); }],
+    [/^#\/character\/new$/, function () { viewGuidedCreate(); }],
+    [/^#\/character\/new\/full$/, function () { viewCharacterForm(null); }],
     [/^#\/time-rules$/, viewTimeRules],
     [/^#\/character\/(\d+)$/, function (m) { viewCharacterForm(+m[1]); }],
     [/^#\/chats$/, function () { viewChat(null); }],
@@ -547,8 +618,11 @@
       view.querySelectorAll("[data-chat]").forEach(function (el) {
         el.onclick = function (e) {
           if (e.target.closest(".edit-link")) return;
-          api("/app/api/conversations", { method: "POST", body: { character_id: +el.getAttribute("data-chat") } })
-            .then(function (r) { location.hash = "#/chat/" + r.id; });
+          var cid = +el.getAttribute("data-chat"), ch = chars.filter(function (x) { return x.id === cid; })[0] || {};
+          api("/app/api/conversations").then(function (list) {
+            var last = list.filter(function (cv) { return cv.character_id === cid && !cv.novel_id; })[0];
+            newScene({ character_id: cid }, ch.name, { resume: last ? last.id : null });
+          });
         };
       });
     });
@@ -557,9 +631,195 @@
   var TRAITS = ["possessive", "morally grey", "obsessive", "protective", "cold", "brooding", "dominant", "jealous",
     "charming", "ruthless", "tortured past", "sarcastic", "tender underneath", "dangerous", "forbidden"];
 
-  function viewCharacterForm(id) {
+  // Guided character creation: one choice per screen, like a character creator. Everything it picks fills the
+  // full form, where the AI writes the rest and anything can still be edited. Every character is an adult.
+  var SWATCH = {
+    skin: [["Porcelain", "#F6E3D4"], ["Fair", "#EBC8A8"], ["Golden", "#D9A577"], ["Tan", "#C08552"], ["Brown", "#8D5534"], ["Deep", "#5A3420"]],
+    hair: [["Black", "#151518"], ["Dark brown", "#3f281d"], ["Chestnut", "#7b4a2c"], ["Auburn", "#8f3a20"], ["Copper red", "#c25a2c"],
+      ["Blonde", "#e2c27a"], ["Platinum", "#efe6cf"], ["Silver", "#c3c4cc"], ["White", "#f4f4f4"], ["Blue-black", "#1e2a4a"]],
+    eyes: [["Brown", "#5b3a22"], ["Hazel", "#8e6b3a"], ["Amber", "#c98a2b"], ["Green", "#4f7a4a"], ["Blue", "#5b8fc7"],
+      ["Grey", "#9aa3ad"], ["Violet", "#8a6bb8"], ["Crimson", "#a3262f"], ["Black", "#151518"]]
+  };
+  var NAMES = {
+    male: ["Dante", "Lucien", "Kael", "Nikolai", "Rafael", "Silas", "Damien", "Elias", "Matteo", "Viktor", "Cassian", "Rowan"],
+    female: ["Valentina", "Seraphina", "Mara", "Elena", "Isolde", "Noor", "Sienna", "Vesper", "Lilith", "Ines", "Katya", "Aurelia"],
+    "non-binary": ["Ash", "Riven", "Sage", "Wren", "Onyx", "Morgan", "Jude", "Ellis", "Nova", "Raven"]
+  };
+  var SURNAMES = ["Moretti", "Volkov", "Vale", "Draven", "Castellano", "Blackwood", "Ashford", "Kross", "Sinclair", "Delacroix", "Varga", "Thorne"];
+  function wizardSteps() {
+    var t = function (list) { return list.map(function (x) { return { v: x[1], e: x[0] }; }); };
+    return [
+      { key: "gender", title: "Who are they?", pick: "one", need: true, items: t([["♀", "female"], ["♂", "male"], ["⚧", "non-binary"]]) },
+      { key: "kind", title: "What are they?", pick: "one", need: true, note: "Supernatural is welcome; they still look like a real person.",
+        items: t([["🧍", "Human"], ["🦇", "Vampire"], ["🧝", "Elf"], ["😈", "Demon"], ["🧚", "Fae"], ["🐺", "Werewolf"], ["🔮", "Witch or warlock"], ["🪽", "Fallen angel"]]),
+        extra: { key: "heritage", title: "Heritage", pick: "one", items: t([["🌏", "East Asian"], ["🌍", "Black"], ["🌍", "White"], ["🌎", "Latino or Latina"],
+          ["🌍", "Arab"], ["🌏", "South Asian"], ["🌍", "Mediterranean"], ["🌍", "Slavic"], ["🌐", "Mixed"]]) },
+        swatch: { key: "skin", title: "Skin tone" } },
+      { key: "hair_style", title: "Hair and eyes", pick: "one", need: true,
+        items: t([["💇", "Long and straight"], ["〰️", "Long and wavy"], ["➰", "Curly"], ["🪢", "Braided"], ["🎀", "Ponytail"], ["🍩", "Bun"],
+          ["✂️", "Short"], ["⚡", "Pixie cut"], ["🪒", "Buzzed"], ["🖤", "Slicked back"], ["🌪️", "Messy"], ["🌀", "Locs"]]),
+        swatch: { key: "hair", title: "Hair colour" }, swatch2: { key: "eyes", title: "Eye colour" } },
+      { key: "build", title: "Body", pick: "one", need: true,
+        items: t([["🩰", "Slim"], ["🏃", "Lean"], ["🤸", "Athletic"], ["⏳", "Curvy"], ["🍑", "Voluptuous"], ["💪", "Muscular"], ["🧱", "Broad-shouldered"], ["🌺", "Full-figured"]]),
+        extra: { key: "height", title: "Height", pick: "one", items: t([["🔹", "Petite"], ["🔷", "Average height"], ["⬆️", "Tall"], ["🗼", "Towering"]]) } },
+      { key: "name", title: "Name, age and voice", form: true },
+      { key: "personality", title: "Personality", pick: 3, need: true, note: "Pick up to three.",
+        items: t([["😏", "Seductive"], ["🙈", "Shy"], ["🍯", "Sweet"], ["😜", "Playful"], ["🔥", "Passionate"], ["🧭", "Adventurous"], ["😎", "Confident"],
+          ["✨", "Charming"], ["💬", "Witty"], ["👑", "Dominant"], ["🕊️", "Submissive"], ["😈", "Mischievous"], ["🤍", "Caring"], ["💅", "Sassy"],
+          ["😤", "Tsundere"], ["🔪", "Yandere"], ["⚡", "Intense"], ["🌙", "Mysterious"], ["📚", "Intellectual"], ["🔗", "Possessive"],
+          ["🧊", "Cold"], ["🌧️", "Brooding"], ["🗡️", "Ruthless"], ["🛡️", "Protective"]]) },
+      { key: "job", title: "Occupation", pick: "one", custom: true,
+        items: t([["🎩", "Mafia boss"], ["🐻", "Bratva enforcer"], ["🗡️", "Assassin"], ["🕶️", "Bodyguard"], ["💼", "Billionaire CEO"], ["🔍", "Detective"],
+          ["🩺", "Doctor"], ["💉", "Nurse"], ["⚖️", "Lawyer"], ["🎨", "Artist"], ["🍸", "Bartender"], ["🖋️", "Tattoo artist"], ["🎸", "Musician"],
+          ["📸", "Model"], ["💃", "Dancer"], ["⛓️", "Dominatrix"], ["🎓", "Professor"], ["🔪", "Chef"], ["🎖️", "Soldier"], ["💻", "Hacker"],
+          ["🗝️", "Thief"], ["🏎️", "Street racer"], ["👑", "Royal heir"], ["🕯️", "Priest or priestess"], ["🏥", "Surgeon"], ["📰", "Journalist"]]) },
+      { key: "relationship", title: "Who are they to you?", pick: "one", custom: true,
+        items: t([["❓", "Stranger"], ["❤️", "Lover"], ["💘", "Crush"], ["💔", "Ex"], ["⚔️", "Rival"], ["🗂️", "Boss"], ["🤝", "Colleague"], ["🏘️", "Neighbor"],
+          ["🛋️", "Roommate"], ["🕶️", "Your bodyguard"], ["⛓️", "Captor"], ["💍", "Arranged marriage"], ["🎭", "Fake dating"], ["🗡️", "Enemy"],
+          ["💌", "Secret admirer"], ["👋", "Friend"], ["🧭", "Mentor"], ["📜", "Owes you a debt"], ["💸", "You owe them"]]) },
+      { key: "hobbies", title: "Hobbies", pick: 3, note: "Optional. Pick up to three.", custom: true,
+        items: t([["🎮", "Gaming"], ["📷", "Photography"], ["🧘", "Yoga"], ["📖", "Reading"], ["🎤", "Singing"], ["🧁", "Baking"], ["🥋", "Martial arts"],
+          ["💃", "Dancing"], ["🍳", "Cooking"], ["🎭", "Cosplay"], ["🏋️", "Weightlifting"], ["✍️", "Writing"], ["🌿", "Gardening"], ["🖌️", "Painting"],
+          ["🏊", "Swimming"], ["🥾", "Hiking"], ["🎸", "Playing guitar"], ["🏃", "Running"], ["🧗", "Rock climbing"], ["♟️", "Chess"], ["🍷", "Wine"],
+          ["🏍️", "Motorcycles"], ["🎯", "Shooting"], ["🃏", "Poker"]]) },
+      { key: "turn_ons", title: "Turn-ons", pick: 4, note: "Optional. Pick up to four; only between consenting adults.", custom: true,
+        items: t([["👙", "Lingerie"], ["🎭", "Roleplay"], ["👠", "High heels"], ["🧦", "Stockings"], ["👑", "Being in control"], ["🕊️", "Giving up control"],
+          ["🖐️", "Spanking"], ["🎗️", "Collars"], ["🖤", "Latex"], ["🌹", "Slow and tender"], ["🗣️", "Praise"], ["🙊", "Teasing"], ["🔥", "Jealousy"],
+          ["🪢", "Restraints"], ["👀", "Being watched"], ["💪", "Muscle worship"], ["🦶", "Feet"], ["🍦", "Vanilla"]]) }
+    ];
+  }
+  function viewGuidedCreate() {
     setNav("characters");
-    var load = Promise.all([id ? api("/app/api/characters/" + id) : Promise.resolve({
+    var steps = wizardSteps(), at = 0, picks = { age: 25, sound: "mysterious", accent: "" };
+    function chosen(key) { var v = picks[key]; return Array.isArray(v) ? v : v ? [v] : []; }
+    function tiles(st) {
+      return '<div class="wiz-tiles">' + st.items.map(function (it) {
+        var on = chosen(st.key).indexOf(it.v) >= 0;
+        return '<button type="button" class="wiz-tile' + (on ? " on" : "") + '" data-k="' + st.key + '" data-v="' + esc(it.v) + '"><span class="em">' + it.e + "</span><span>" + esc(it.v.charAt(0).toUpperCase() + it.v.slice(1)) + "</span></button>";
+      }).join("") + "</div>";
+    }
+    function swatches(sw) {
+      return '<h4 class="wiz-sub">' + sw.title + '</h4><div class="wiz-swatches">' + SWATCH[sw.key].map(function (x) {
+        return '<button type="button" class="wiz-swatch' + (picks[sw.key] === x[0] ? " on" : "") + '" data-k="' + sw.key + '" data-v="' + x[0] + '" title="' + x[0] + '" style="--sw:' + x[1] + '"><span></span><small>' + x[0] + "</small></button>";
+      }).join("") + "</div>";
+    }
+    function ready(st) {
+      if (st.form) return (picks.name || "").trim() && +picks.age >= 18;
+      return !st.need || chosen(st.key).length;
+    }
+    function draw() {
+      var st = steps[at];
+      var body;
+      if (st.form) {
+        var acc = [["", "Pick later"], ["irish", "Irish"], ["french", "French"], ["german", "German"], ["nordic", "Nordic"], ["italian", "Italian"], ["russian", "Russian"]];
+        var snd = [["innocent", "Innocent"], ["mysterious", "Mysterious"], ["villain", "Villain"], ["possessed", "Possessed"]];
+        body = '<div class="wiz-name"><label>Character name<div class="row"><input id="wName" maxlength="60" value="' + esc(picks.name || "") + '" placeholder="Name">' +
+          '<button type="button" class="btn small ghost" id="wRandom" title="Random name">🎲</button></div></label>' +
+          '<label>Age <span class="hint">18 or older</span><div class="wiz-age"><button type="button" class="btn small ghost" data-age="-1">‹</button>' +
+          '<input id="wAge" type="number" min="18" max="9999" value="' + picks.age + '"><button type="button" class="btn small ghost" data-age="1">›</button></div></label></div>' +
+          '<h4 class="wiz-sub">Voice accent <span class="hint">every accent speaks English</span></h4><div class="choices">' + acc.map(function (a) {
+            return '<button type="button" class="chip' + (picks.accent === a[0] ? " on" : "") + '" data-k="accent" data-v="' + a[0] + '">' + a[1] + "</button>"; }).join("") + "</div>" +
+          '<h4 class="wiz-sub">Voice sound</h4><div class="choices">' + snd.map(function (a) {
+            return '<button type="button" class="chip' + (picks.sound === a[0] ? " on" : "") + '" data-k="sound" data-v="' + a[0] + '">' + a[1] + "</button>"; }).join("") + "</div>";
+      } else {
+        body = (st.note ? '<p class="hint">' + st.note + "</p>" : "") +
+          (st.items.length > 12 ? '<input type="search" class="wiz-search" placeholder="Search" aria-label="Search">' : "") +
+          tiles(st) +
+          (st.custom ? '<label class="wiz-custom">Custom <span class="hint">write your own</span><input data-custom="' + st.key + '" maxlength="120" value="' + esc(picks[st.key + "_custom"] || "") + '"></label>' : "") +
+          (st.extra ? '<h4 class="wiz-sub">' + st.extra.title + "</h4>" + tiles(st.extra) : "") +
+          (st.swatch ? swatches(st.swatch) : "") + (st.swatch2 ? swatches(st.swatch2) : "");
+      }
+      view.innerHTML = '<div class="wizard panel form">' +
+        '<div class="wiz-top"><span class="hint">Step ' + (at + 1) + " of " + steps.length + '</span><a class="hint" href="#/character/new/full">Skip to the full form</a></div>' +
+        '<div class="wiz-dots">' + steps.map(function (s2, i) { return '<span class="' + (i < at ? "done" : i === at ? "now" : "") + '"></span>'; }).join("") + "</div>" +
+        "<h2>" + esc(st.title) + "</h2>" + body +
+        '<div class="row wiz-nav">' + (at ? '<button type="button" class="btn ghost" id="wBack">← Back</button>' : "") +
+        '<button type="button" class="btn primary" id="wNext"' + (ready(st) ? "" : " disabled") + ">" + (at === steps.length - 1 ? "Create character →" : "Next →") + "</button></div></div>";
+      wire(st);
+    }
+    function wire(st) {
+      var w = view.querySelector(".wizard"), next = document.getElementById("wNext");
+      w.onclick = function (e) {
+        var b = e.target.closest("button");
+        if (!b) return;
+        if (b.dataset.k) {
+          var k = b.dataset.k, v = b.dataset.v, owner = steps[at].key === k ? steps[at] : (steps[at].extra && steps[at].extra.key === k ? steps[at].extra : null);
+          if (owner && typeof owner.pick === "number") {
+            var cur = chosen(k), i = cur.indexOf(v);
+            if (i >= 0) cur.splice(i, 1); else if (cur.length < owner.pick) cur.push(v); else { toast("Up to " + owner.pick + ". Unpick one first."); return; }
+            picks[k] = cur;
+          } else { picks[k] = picks[k] === v && !(steps[at].form) ? "" : v; }
+          if (st.form) { picks.name = document.getElementById("wName").value; picks.age = +document.getElementById("wAge").value || 18; }
+          draw();
+          if (owner && owner.pick === "one" && k === st.key && !st.extra && !st.swatch && !st.custom && ready(st)) { at++; draw(); }  // single choice: move on
+        } else if (b.id === "wBack") { at--; draw(); }
+        else if (b.id === "wNext") {
+          if (at < steps.length - 1) { at++; draw(); } else finish();
+        } else if (b.id === "wRandom") {
+          var g = NAMES[picks.gender] || NAMES.female;
+          document.getElementById("wName").value = g[Math.floor(Math.random() * g.length)] + " " + SURNAMES[Math.floor(Math.random() * SURNAMES.length)];
+          picks.name = document.getElementById("wName").value; next.disabled = !ready(st);
+        } else if (b.dataset.age) {
+          var a = document.getElementById("wAge"); a.value = Math.max(18, (+a.value || 18) + +b.dataset.age); picks.age = +a.value;
+        }
+      };
+      w.oninput = function (e) {
+        if (e.target.id === "wName") picks.name = e.target.value;
+        if (e.target.id === "wAge") picks.age = +e.target.value;
+        if (e.target.dataset.custom) picks[e.target.dataset.custom + "_custom"] = e.target.value;
+        if (e.target.classList.contains("wiz-search")) {
+          var q = e.target.value.trim().toLowerCase();
+          w.querySelectorAll(".wiz-tiles:first-of-type .wiz-tile").forEach(function (t) { t.hidden = q && t.dataset.v.toLowerCase().indexOf(q) < 0; });
+        }
+        next.disabled = !ready(st);
+      };
+    }
+    function list(key) {
+      var v = chosen(key).slice(), c = (picks[key + "_custom"] || "").trim();
+      if (c) v.push(c);
+      return v;
+    }
+    function finish() {
+      if (+picks.age < 18) { toast("Characters must be 18 or older.", true); return; }
+      var g = picks.gender || "female", kind = picks.kind && picks.kind !== "Human" ? picks.kind.toLowerCase() : "";
+      var look = [picks.height, picks.build ? picks.build.toLowerCase() + " build" : ""].filter(Boolean).join(", ");
+      var appearance = [
+        (picks.heritage ? picks.heritage + " " : "") + (kind ? kind : g === "male" ? "man" : g === "female" ? "woman" : "person") + (look ? ", " + look.toLowerCase() : "") + ".",
+        picks.skin ? picks.skin + " skin." : "",
+        picks.hair || picks.hair_style ? (picks.hair ? picks.hair + " hair" : "Hair") + (picks.hair_style ? ", " + picks.hair_style.toLowerCase() : "") + "." : "",
+        picks.eyes ? picks.eyes + " eyes." : ""
+      ].filter(Boolean).join(" ");
+      appearance = appearance.charAt(0).toUpperCase() + appearance.slice(1);
+      var pers = list("personality"), job = list("job")[0] || "", rel = list("relationship")[0] || "";
+      var P = function (v) { return { value: v, secret: false }; }, profile = {};
+      if (look) profile.height_build = P(look);
+      if (picks.skin) profile.skin = P(picks.skin + (picks.heritage ? ", " + picks.heritage : ""));
+      if (picks.hair || picks.hair_style) profile.hair = P([picks.hair, picks.hair_style].filter(Boolean).join(", ").toLowerCase());
+      if (picks.eyes) profile.eyes = P(picks.eyes);
+      if (kind) profile.species = P(picks.kind);
+      if (pers.length) profile.temperament = P(pers.join(", "));
+      if (job) profile.job = P(job);
+      if (rel) profile.relationship = P(rel);
+      if (list("hobbies").length) profile.likes = P(list("hobbies").join(", "));
+      if (list("turn_ons").length) profile.turn_ons = P(list("turn_ons").join(", "));
+      var age = +picks.age, ageGroup = age <= 25 ? "young" : age <= 35 ? "middle" : age <= 60 || age > 100 ? "older" : "elder";
+      var c = {
+        name: picks.name.trim(), age: age, gender: g, tagline: "", appearance: appearance,
+        persona: picks.name.trim() + " is " + (pers.length ? pers.join(", ").toLowerCase() : "hard to read") + "." +
+          (job ? " Works as: " + job + "." : "") + (rel ? " To you: " + rel + "." : ""),
+        greeting: "", tags: pers.concat(job ? [job] : []).join(", ").toLowerCase(), color: "#F1916D", avatar: "", profile: profile,
+        voice_style: picks.accent ? JSON.stringify({ accent: picks.accent, age: ageGroup, gender: g === "male" ? "male" : "female", sound: picks.sound }) : ""
+      };
+      var idea = "A " + (pers.join(", ").toLowerCase() || "") + " " + (kind || (g === "male" ? "man" : g === "female" ? "woman" : "person")) +
+        (job ? ", " + job.toLowerCase() : "") + (rel ? ", who is " + rel.toLowerCase() + " to the user" : "") + ".";
+      viewCharacterForm(null, { c: c, idea: idea });
+    }
+    draw();
+  }
+
+  function viewCharacterForm(id, guided) {
+    setNav("characters");
+    var load = Promise.all([id ? api("/app/api/characters/" + id) : Promise.resolve(guided ? guided.c : {
       name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#F1916D", avatar: "", profile: {},
     }), api("/app/api/profile-fields")]);
     load.then(function (r) {
@@ -600,6 +860,10 @@
       }
       form.oninput = preview; preview();
       wireVoiceSection(form, c);
+      if (guided) {  // came from the guided creator: let the AI write what the picks didn't cover
+        document.getElementById("aiIdea").value = guided.idea;
+        setTimeout(function () { var b = form.querySelector('[data-ai="empty"]'); if (b) b.click(); }, 0);
+      }
       form.addEventListener("click", function (e) {
         var lock = e.target.closest("[data-secret]");
         if (lock) { setSecret(lock, lock.dataset.secret !== "1"); return; }
@@ -777,16 +1041,16 @@
           e.preventDefault();
           var f = e.target;
           if (f.id === "newStory") {
-            api("/app/api/storylines", { method: "POST", body: { title: f.title.value, premise: f.premise.value } })
-              .then(function (st) {
-                return api("/app/api/conversations", { method: "POST", body: { character_id: +f.character.value, storyline_id: st.id, new: true, story_start: f.start.value || null } });
-              })
-              .then(function (r) { location.hash = "#/chat/" + r.id; })
-              .catch(function (err) { toast(err.message, true); });
+            var made = null;  // the storyline is only created once a start is picked
+            pickStart({ who: f.character.selectedOptions[0].textContent, characterId: +f.character.value, create: function (extra) {
+              return (made ? Promise.resolve(made) : api("/app/api/storylines", { method: "POST", body: { title: f.title.value, premise: f.premise.value } }))
+                .then(function (st) {
+                  made = st;
+                  return api("/app/api/conversations", { method: "POST", body: Object.assign({ character_id: +f.character.value, storyline_id: st.id, new: true, story_start: f.start.value || null }, extra) });
+                });
+            } });
           } else if (f.dataset.sceneform) {
-            api("/app/api/conversations", { method: "POST", body: { character_id: +f.character.value, storyline_id: +f.dataset.sceneform, new: true } })
-              .then(function (r) { location.hash = "#/chat/" + r.id; })
-              .catch(function (err) { toast(err.message, true); });
+            newScene({ character_id: +f.character.value, storyline_id: +f.dataset.sceneform }, f.character.selectedOptions[0].textContent);
           } else if (f.dataset.editform) {
             api("/app/api/storylines/" + f.dataset.editform, { method: "PUT", body: { title: f.title.value, premise: f.premise.value } })
               .then(function () { toast("Storyline saved"); route(); })
@@ -1051,8 +1315,7 @@
         if (!memPanel.hidden) loadMemory();
       };
       document.getElementById("newScene").onclick = function () {
-        api("/app/api/conversations", { method: "POST", body: { character_id: c.id, novel_id: conv.novel ? conv.novel.id : null, new: true, storyline_from: convId } })
-          .then(function (r) { location.hash = "#/chat/" + r.id; });
+        newScene({ character_id: c.id, novel_id: conv.novel ? conv.novel.id : null, storyline_from: convId }, c.name);
       };
       document.getElementById("delConv").onclick = function () {
         if (!confirm("Delete this scene?")) return;

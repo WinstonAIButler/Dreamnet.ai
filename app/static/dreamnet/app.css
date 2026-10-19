@@ -473,3 +473,54 @@ a.card.new { text-decoration: none; }
 .lock.on { border-color: var(--accent); color: var(--accent); background: rgba(241,145,109,.1); }
 .preset-box { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); }
 .preset-box .hint { margin: 0; }
+
+/* "Where does it start?" picker */
+.start-dlg { width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line); border-radius: 20px;
+  background: var(--bg-2); color: var(--text); }
+.start-dlg::backdrop { background: rgba(3, 18, 47, .78); backdrop-filter: blur(3px); }
+.start-form { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px 20px; }
+.start-head { display: flex; align-items: center; justify-content: space-between; }
+.start-head h2 { margin: 0; font-family: var(--serif); font-size: 28px; }
+.start-head .x { background: none; border: 0; color: var(--muted); font-size: 26px; cursor: pointer; line-height: 1; }
+.start-form .hint { margin: 0; }
+.start-groups { display: flex; flex-direction: column; gap: 14px; max-height: 42vh; overflow-y: auto; padding-right: 4px; }
+.start-group h4 { margin: 0 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-2); }
+.start-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.start-tile { display: flex; align-items: center; gap: 10px; text-align: left; padding: 10px 12px; border-radius: 12px; cursor: pointer;
+  background: var(--card); border: 1px solid var(--line); color: var(--text); font: inherit; font-size: 13.5px; line-height: 1.3; }
+.start-tile .em { font-size: 22px; flex: none; }
+.start-tile:hover { border-color: var(--accent-2); }
+.start-tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.start-actions { justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.start-actions [data-go] { margin-left: auto; }
+@media (max-width: 560px) { .start-tiles { grid-template-columns: 1fr; } .start-actions [data-go] { width: 100%; } }
+
+/* Guided character creator */
+.wizard { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.wizard h2 { margin: 0; font-family: var(--serif); font-size: 34px; }
+.wiz-top { display: flex; justify-content: space-between; }
+.wiz-dots { display: flex; gap: 6px; }
+.wiz-dots span { flex: 1; height: 4px; border-radius: 4px; background: var(--line); }
+.wiz-dots .done { background: var(--accent-2); }
+.wiz-dots .now { background: var(--accent); }
+.wiz-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.wiz-tile { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 14px; cursor: pointer; text-align: left;
+  background: var(--card); border: 1px solid var(--line); color: var(--text); font: inherit; font-size: 14.5px; }
+.wiz-tile .em { font-size: 24px; }
+.wiz-tile:hover { border-color: var(--accent-2); }
+.wiz-tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; background: linear-gradient(160deg, var(--card), var(--line)); }
+.wiz-sub { margin: 6px 0 0; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-2); font-weight: 600; }
+.wiz-swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+.wiz-swatch { display: flex; flex-direction: column; align-items: center; gap: 4px; background: none; border: 0; cursor: pointer; color: var(--muted); font: inherit; }
+.wiz-swatch span { width: 38px; height: 38px; border-radius: 50%; background: var(--sw); border: 2px solid var(--line); }
+.wiz-swatch.on span { border-color: var(--accent); box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent); }
+.wiz-swatch.on small { color: var(--text); }
+.wiz-name { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+.wiz-name .row { display: flex; gap: 6px; }
+.wiz-name input { flex: 1; }
+.wiz-age { display: flex; gap: 6px; align-items: center; }
+.wiz-age input { text-align: center; font-size: 20px; }
+.wiz-nav { justify-content: flex-end; gap: 8px; }
+.chip.on { border-color: var(--accent); color: var(--text); background: var(--line); }
+@media (max-width: 560px) { .wiz-tiles { grid-template-columns: 1fr 1fr; } .wiz-name { grid-template-columns: 1fr; } .wizard h2 { font-size: 28px; } }
+.start-form textarea { min-height: 56px; }

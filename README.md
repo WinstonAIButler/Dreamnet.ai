@@ -19,6 +19,20 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   attorney). Supernatural characters are welcome, but everyone is written and
   described as lifelike, never cartoon or anime. Create your own with traits,
   backstory, look and an opening line.
+- **Guided character creator.** Creating a character walks you through one
+  choice per screen: gender, what they are (human, vampire, elf, demon, fae,
+  werewolf, witch or warlock, fallen angel) and heritage, skin tone, hair style
+  and colour, eye colour, build and height, name, age (18 or older) and voice
+  accent, personality (up to three), occupation, who they are to you, hobbies
+  and turn-ons. Your picks fill the full form, the AI writes the rest, and you
+  can edit anything before saving. **Skip to the full form** is always there.
+- **Choose where a scene starts.** Starting a roleplay (from a character, a new
+  storyline, a new scene) asks where it begins: the character's own home,
+  workplace or car from their profile, or places grouped as city nights, old
+  money and shadows, danger, escape and everyday. You can search them, write your
+  own place, add what's happening, or press **Surprise me**. The character then
+  writes an opening set in that place, and the scene starts with a marker
+  showing where it is. "Use their usual opening" keeps the saved opening line.
 - **Detailed character profiles.** Beyond the basics, each character has a
   profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
   piercings, style, scent, voice), personality (temperament, desires, fears,
