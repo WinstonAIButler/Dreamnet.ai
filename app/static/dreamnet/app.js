@@ -376,7 +376,10 @@
   function api(path, opts) {
     opts = opts || {};
     var init = { method: opts.method || "GET", credentials: "same-origin", headers: {} };
-    if (opts.body !== undefined) {
+    if (opts.file) {  // raw upload, e.g. a picture
+      init.headers["Content-Type"] = opts.file.type || "application/octet-stream";
+      init.body = opts.file;
+    } else if (opts.body !== undefined) {
       init.headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(opts.body);
     }
@@ -1026,16 +1029,34 @@
         ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate", "voice_engine", "voice_profile"].forEach(function (k) { body[k] = form[k].value; });
         body.voice_style = formStyle(form) || "";
         body.profile = collectProfile(form);
+        var made = null;
         api("/app/api/characters", { method: "POST", body: body })
-          .then(function () { return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })
+          .then(function (r) { if (!id) { made = id = r.id; } return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })
           .then(function (r) {
+            if (made) { toast("Portrait ready"); location.hash = "#/character/" + made; return; }  // new character: open its saved page
             form.avatar.value = r.avatar;
             promptEl.value = r.prompt;
             preview();
-            status.textContent = "Done. Generate again for a different take, or edit the prompt first.";
+            status.textContent = "Done. Make another for a different take, or edit the prompt first.";
           })
           .catch(function (err) { status.textContent = err.message; })
           .finally(function () { genP.disabled = false; });
+      };
+      var up = document.getElementById("uploadPortrait");
+      if (up) up.onchange = function () {
+        var f = up.files && up.files[0];
+        var status = document.getElementById("uploadStatus");
+        if (!f) return;
+        if (f.size > 10 * 1024 * 1024) { status.textContent = "That picture is too big. Use one under 10 MB."; return; }
+        status.textContent = "Uploading…";
+        api("/app/api/portraits/upload", { method: "POST", file: f })
+          .then(function (r) {
+            form.avatar.value = r.avatar;
+            preview();
+            status.textContent = id ? "Uploaded. Save changes to keep it." : "Uploaded. It's kept when you create the character.";
+          })
+          .catch(function (err) { status.textContent = err.message; })
+          .finally(function () { up.value = ""; });
       };
       var del = document.getElementById("delChar");
       if (del) del.onclick = function () {
@@ -1081,17 +1102,19 @@
   }
 
   function portraitSection(id, c) {
-    var inner;
-    if (!state.me.portraits) {
-      inner = '<p class="hint">Lifelike portraits need a ComfyUI server with Z-Image-Turbo (AI Playground includes one). Set COMFYUI_URL in .env to turn this on.</p>';
-    } else if (!id) {
-      inner = '<p class="hint">Create the character first, then generate a lifelike portrait here.</p>';
-    } else {
-      inner = '<textarea id="portraitPrompt" rows="3" placeholder="Leave empty and the AI writes a photo prompt from this character.">' + esc(c.portrait_prompt || "") + "</textarea>" +
-        '<div class="row"><button type="button" class="btn" id="genPortrait">Generate lifelike portrait</button>' +
+    var inner = "";
+    if (state.me.portrait_gen) {
+      inner = '<p class="hint">Make a portrait from the description, or upload your own photo.' + (id ? "" : " Making one creates the character first, so fill in a name and personality.") + "</p>" +
+        '<textarea id="portraitPrompt" rows="3" placeholder="Leave empty and the AI writes a photo prompt from this character\'s description.">' + esc(c.portrait_prompt || "") + "</textarea>" +
+        '<div class="row"><button type="button" class="btn primary" id="genPortrait">' + ic("wand") + ' Make it from the description</button>' +
         '<span class="hint" id="portraitStatus"></span></div>';
+    } else {
+      inner = '<p class="hint">Upload a realistic photo of this character.</p>';
     }
-    return '<fieldset class="cast portrait"><legend>Portrait <span class="hint">photorealistic, made with Z-Image-Turbo</span></legend>' + inner + "</fieldset>";
+    var upload = '<div class="row"><label class="btn" id="uploadPortraitBtn">' + ic("image") +
+      ' Upload a photo from your computer<input type="file" id="uploadPortrait" accept="image/jpeg,image/png,image/webp" hidden></label>' +
+      '<span class="hint" id="uploadStatus">JPEG, PNG or WebP, up to 10 MB. Adults only.</span></div>';
+    return '<fieldset class="cast portrait"><legend>Portrait <span class="hint">a realistic photo</span></legend>' + inner + upload + "</fieldset>";
   }
 
   // ---------- roleplay chat ----------

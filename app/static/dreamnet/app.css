@@ -739,3 +739,7 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
   .rp-head .grow { display: none; }
   .rp-head .icon-btn { width: 34px; height: 34px; }
 }
+
+/* Portrait upload: the file input hides inside a button-styled label. */
+.portrait label.btn { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; cursor: pointer; margin: 0; }
+.portrait .row { flex-wrap: wrap; gap: 10px; }
