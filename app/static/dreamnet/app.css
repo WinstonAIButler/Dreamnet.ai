@@ -247,6 +247,15 @@ h2 { font-family: var(--serif); font-weight: 600; font-size: 30px; margin: 0; }
 .msg:hover .msg-tools { opacity: 1; }
 .msg-tools button { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .msg-tools button:hover { color: var(--text); background: var(--card); }
+.scene-pic { margin: 2px 0 0; width: min(560px, 100%); border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: var(--bg-2); }
+.scene-pic img { display: block; width: 100%; aspect-ratio: 1216 / 832; object-fit: cover; }
+.scene-pic figcaption { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px; }
+.scene-pic figcaption button { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; padding: 3px 7px; border-radius: 6px; }
+.scene-pic figcaption button:hover { color: var(--text); background: var(--card); }
+.scene-pic.busy { aspect-ratio: 1216 / 832; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px;
+  background: linear-gradient(110deg, var(--bg-2) 30%, var(--card) 50%, var(--bg-2) 70%); background-size: 250% 100%; animation: picShimmer 1.6s linear infinite; }
+@keyframes picShimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) { .scene-pic.busy { animation: none; } }
 .conv b small { font-weight: 400; }
 
 .bible { max-width: 860px; margin: 0 auto; }

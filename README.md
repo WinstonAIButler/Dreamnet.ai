@@ -76,6 +76,14 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
 - **Lifelike portraits.** One click turns a character card into a photorealistic
   portrait, using the Z-Image-Turbo workflow from Intel AI Playground on your
   own ComfyUI.
+- **Scene pictures.** Press **🖼 Picture** under any message to turn that
+  moment into a photorealistic picture. What that message says happens is the
+  picture's action. Everything else is there to keep it accurate: the look,
+  profile and remembered details of every character in it (the scene's
+  character plus anyone from your library named in the moment), the storyline,
+  the scene so far, the last few messages and the in-story time of day. The
+  picture stays with the message. Make a new one, edit the prompt, or remove
+  it. Uses the same ComfyUI as portraits, in landscape, and keeps it tasteful.
 - **Export** a novel as one Markdown manuscript.
 - **Installable** as an app on your phone or desktop (Add to Home Screen).
 

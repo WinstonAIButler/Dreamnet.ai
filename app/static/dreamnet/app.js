@@ -714,8 +714,8 @@
         for (var j = list.length - 1; j >= 0; j--) if (list[j].story_at) return list[j].story_at;
         return conv.clock;
       }
-      function render() {
-        var lastDay = "";
+      function render(keepScroll) {
+        var lastDay = "", top = msgs.scrollTop;
         var start = conv.start || currentClock();
         var sk = sky(currentClock());
         document.getElementById("clockNow").textContent = storyClock(currentClock(), start, true) + " · " + sk.part + " · " + sk.icon;
@@ -732,17 +732,30 @@
           return head + '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
             '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
             (m.role === "assistant" && m.story_at ? '<button type="button" class="now" data-settime="' + m.id + '" title="Change this time">' + esc(nowLine(m.story_at, start)) + "</button>" : "") + "</div>" +
+            (m.picturing ? '<div class="scene-pic busy"><span>🎨 Picturing this moment…</span></div>' :
+              m.image ? '<figure class="scene-pic"><a href="' + esc(m.image) + '" target="_blank" rel="noopener" title="Open full size"><img src="' + esc(m.image) + '" alt="Picture of this moment" loading="lazy"></a>' +
+                '<figcaption><button data-picture="' + i + '">↻ New picture</button><button data-picprompt="' + i + '">✎ Edit prompt</button><button data-picdel="' + i + '">× Remove</button></figcaption></figure>' : "") +
             (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
               '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time>" +
               (m.role === "assistant" ? '<button data-listen="' + i + '">🔊 Listen</button>' : "") +
+              (!m.image && !m.picturing ? '<button data-picture="' + i + '" title="Make a picture of this moment">🖼 Picture</button>' : "") +
               (m.role === "assistant" && isLast && i > 0 ? '<button data-regen="' + m.id + '">↻ Regenerate</button>' : "") +
               (conv.novel && m.role === "assistant" ? '<button data-tochapter="' + i + '">＋ Add to chapter</button>' : "") +
               (i > 0 ? '<button data-rewind="' + m.id + '">Rewind to here</button>' : "") + "</div>" : "") +
             "</div></div>";
         }).join("");
-        msgs.scrollTop = msgs.scrollHeight;
+        msgs.scrollTop = keepScroll ? top : msgs.scrollHeight;
       }
       render();
+
+      // A picture of one moment: that message drives the action, the server adds what's known about everyone in it.
+      function makePicture(m, promptText) {
+        m.picturing = true; render(true);
+        api("/app/api/messages/" + m.id + "/picture", { method: "POST", body: promptText ? { prompt: promptText } : {} })
+          .then(function (r) { m.image = r.image; m.image_prompt = r.prompt; })
+          .catch(function (err) { toast(err.message, true); })
+          .finally(function () { m.picturing = false; render(true); });
+      }
 
       function send(text) {
         sendBtn.disabled = true;
@@ -803,6 +816,15 @@
           api("/app/api/marks/" + b.dataset.delmark, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id !== +b.dataset.delmark; }); render();
           });
+        } else if (b.dataset.picture) {
+          makePicture(list[+b.dataset.picture]);
+        } else if (b.dataset.picprompt) {
+          var pm = list[+b.dataset.picprompt];
+          var edited = prompt("Picture prompt. Change it and press OK to make a new picture.", pm.image_prompt || "");
+          if (edited && edited.trim()) makePicture(pm, edited.trim());
+        } else if (b.dataset.picdel) {
+          var dm = list[+b.dataset.picdel];
+          api("/app/api/messages/" + dm.id + "/picture", { method: "DELETE" }).then(function () { dm.image = ""; dm.image_prompt = ""; render(true); });
         } else if (b.dataset.tochapter) {
           addToChapter(conv.novel.id, list[+b.dataset.tochapter].content);
         }

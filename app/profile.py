@@ -104,4 +104,4 @@ def for_prompt(profile: dict, name: str, username: str) -> str:
 def looks(profile: dict) -> str:
     """Visible physical details, for portraits (secret ones included only if they'd show)."""
     keys = ("height_build", "face", "eyes", "hair", "skin", "scars", "tattoos", "piercings", "style")
-    return " ".join(f"{FIELDS[k]}: {profile[k]['value']}." for k in keys if k in profile)
+    return " ".join(f"{FIELDS[k]}: {profile[k]['value'].rstrip('.')}." for k in keys if k in profile)

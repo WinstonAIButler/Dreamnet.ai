@@ -156,6 +156,8 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     story_at TEXT NOT NULL DEFAULT '', -- in-universe clock at this message (ISO, no zone)
     time_override REAL,               -- user message: minutes the reply must cover, set with [Time: ...]
+    image TEXT NOT NULL DEFAULT '',   -- scene picture URL for this moment
+    image_prompt TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
@@ -400,6 +402,9 @@ async def init_studio_db(db_path: str):
             await db.execute("ALTER TABLE messages ADD COLUMN story_at TEXT NOT NULL DEFAULT ''")
         if "time_override" not in cols:
             await db.execute("ALTER TABLE messages ADD COLUMN time_override REAL")
+        if "image" not in cols:
+            await db.execute("ALTER TABLE messages ADD COLUMN image TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE messages ADD COLUMN image_prompt TEXT NOT NULL DEFAULT ''")
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(conversations)")).fetchall()]
         if "time_rules" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN time_rules TEXT NOT NULL DEFAULT ''")
@@ -932,6 +937,129 @@ async def _portrait_prompt(request: Request, s: dict, c: dict) -> str:
     return portraits.template_prompt(c)
 
 
+SCENE_CONTEXT_MESSAGES = 6  # earlier messages a scene picture reads for setting and lead-in
+MAX_PICTURE_PEOPLE = 4
+
+
+@router.post("/messages/{msg_id}/picture")
+async def make_scene_picture(msg_id: int, request: Request, s: dict = Depends(_session)):
+    """Picture of one roleplay moment. The message's own text sets the action; what's known about the
+    characters in it (card, profile, memories) and the story so far keep their looks and the setting right.
+    With "prompt" in the body that prompt is used as is; otherwise the chat model writes one."""
+    m = await _row("SELECT * FROM messages WHERE id = ?", (msg_id,))
+    if not m or m["role"] not in ("user", "assistant"):
+        return _err(404, "Message not found")
+    if not portraits.enabled():
+        return _err(503, "Pictures need a ComfyUI server. Set COMFYUI_URL in .env (see README).")
+    body = await request.json()
+    prompt = str(body.get("prompt") or "").strip()[:4000]
+    if not prompt:
+        prompt = await _scene_prompt(s, m)
+    if mentions_minor(prompt, strict=True):
+        return _err(400, "Pictures must show adults only.")
+    try:
+        png = await portraits.generate(api_routes.http_client, prompt,
+                                       width=portraits.SCENE_WIDTH, height=portraits.SCENE_HEIGHT)
+    except portraits.PortraitError as e:
+        return _err(502, str(e))
+    url = portraits.save(msg_id, png, kind="scene")
+    await _exec("UPDATE messages SET image = ?, image_prompt = ? WHERE id = ?", (url, prompt, msg_id))
+    return JSONResponse({"image": url, "prompt": prompt})
+
+
+@router.delete("/messages/{msg_id}/picture")
+async def delete_scene_picture(msg_id: int, s: dict = Depends(_session)):
+    await _exec("UPDATE messages SET image = '', image_prompt = '' WHERE id = ?", (msg_id,))
+    return JSONResponse({"ok": True})
+
+
+def _mentions_name(name: str, text: str) -> bool:
+    first = name.split()[0] if name.split() else name
+    return any(re.search(rf"\b{re.escape(n)}\b", text, re.IGNORECASE) for n in {name, first} if len(n) > 1)
+
+
+def _person_sheet(c: dict, mems: list[dict]) -> str:
+    """Everything known about how a character looks, for a scene picture."""
+    age = f"{c['age']}" if int(c["age"]) <= 100 else f"ageless, looks about 35 (really {c['age']})"
+    prof = profiles.clean(c.get("profile"))
+    lines = [f"{c['name']} ({c['gender']}, age {age})",
+             f"  Appearance: {c['appearance'] or 'not described'}"]
+    if profiles.looks(prof):
+        lines.append(f"  Details: {profiles.looks(prof)}")
+    for k in ("species", "powers"):
+        if k in prof:
+            lines.append(f"  {profiles.FIELDS[k]}: {prof[k]['value']}")
+    if mems:
+        lines.append("  Remembered from the story (may change how they look now): "
+                     + " | ".join(x["content"] for x in mems))
+    return "\n".join(lines)
+
+
+async def _scene_prompt(s: dict, m: dict) -> str:
+    """Ask the chat model for a Z-Image prompt of this moment, from the moment itself plus what came before."""
+    cv = await _row("SELECT * FROM conversations WHERE id = ?", (m["conversation_id"],))
+    c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
+    current = _TIME_TAG.sub("", m["content"]).strip()
+    earlier = await _rows("SELECT role, content FROM messages WHERE conversation_id = ? AND id < ? "
+                          "AND role != 'mark' ORDER BY id DESC LIMIT ?",
+                          (cv["id"], m["id"], SCENE_CONTEXT_MESSAGES))
+    earlier.reverse()
+    lead_in = "\n".join(f"{c['name'] if e['role'] == 'assistant' else s['username']}: "
+                        f"{_TIME_TAG.sub('', e['content']).strip()[:600]}" for e in earlier)
+
+    # Who is in it: the scene's character, plus anyone else from the library named in this moment or just before.
+    people = [c]
+    nearby = current + "\n" + "\n".join(e["content"] for e in earlier[-2:])
+    for o in await _rows("SELECT * FROM characters WHERE id != ? ORDER BY id", (c["id"],)):
+        if len(people) < MAX_PICTURE_PEOPLE and _mentions_name(o["name"], nearby):
+            people.append(o)
+    sheets = []
+    for p in people:
+        mems = await _rows("""SELECT content FROM memories WHERE character_id = ?
+                              AND (storyline_id = ? OR storyline_id IS NULL) ORDER BY id DESC LIMIT 12""",
+                           (p["id"], cv["storyline_id"]))
+        sheets.append(_person_sheet(p, mems))
+
+    when = ""
+    if m["story_at"]:
+        d = datetime.fromisoformat(m["story_at"])
+        when = f"{_clock_text(m['story_at'])}, {_daypart(d)}, moon: {_moon(d)}"
+    story = await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],))
+    context = ""
+    if story:
+        context += f"Storyline: {story['title']}" + (f". {story['premise']}" if story["premise"] else "") + "\n"
+    if cv["novel_id"]:
+        novel = await _row("SELECT title, setting FROM novels WHERE id = ?", (cv["novel_id"],))
+        if novel and novel["setting"]:
+            context += f"Novel setting: {novel['setting']}\n"
+    if cv["summary"]:
+        context += f"Story so far: {cv['summary'][-1500:]}\n"
+    who_wrote = c["name"] if m["role"] == "assistant" else s["username"]
+    user_msg = (f"CHARACTERS (keep their looks exactly):\n" + "\n".join(sheets) + "\n"
+                f"{s['username']} is the user's own character, and \"you\" in the text means {s['username']}; show "
+                "them only as the text describes them, or frame the shot so they are seen from behind or partly out "
+                "of frame. Words in `backticks` are private thoughts: they set the mood but are not visible.\n\n"
+                + (f"BACKGROUND:\n{context}\n" if context else "")
+                + (f"TIME: {when}\n\n" if when else "")
+                + (f"JUST BEFORE (for where they are, what they wear, and lead-in only):\n{lead_in}\n\n" if lead_in else "")
+                + f"CURRENT MOMENT, written by {who_wrote} (this is what the picture shows):\n{current[:2000]}")
+    messages = [{"role": "system", "content": portraits.SCENE_INSTRUCTIONS},
+                {"role": "user", "content": user_msg}]
+    try:
+        text = (await _complete(s["user_id"], messages, 0.6, 400)).strip().strip('"')
+        if len(text) > 40:
+            return text
+    except Exception:
+        pass
+    # No chat model: a plain prompt from the moment and the main character's look.
+    plain = re.sub(r'[*`"]', "", current)[:700]
+    return (f"Cinematic photorealistic film still. {c['appearance']} {profiles.looks(profiles.clean(c.get('profile')))} "
+            f"The moment: {plain} "
+            + (f"Time of day: {_daypart(datetime.fromisoformat(m['story_at']))}. " if m["story_at"] else "")
+            + "All people are adults. Tasteful, no explicit nudity. Natural skin texture, real light, 35mm lens, "
+              "shallow depth of field. Not a drawing, not anime, not CGI.")
+
+
 async def _complete(user_id: int, messages: list[dict], temperature: float, max_tokens: int,
                     model: str | None = None) -> str:
     """One non-streaming completion through the proxy's queue; returns the text."""
@@ -1229,8 +1357,8 @@ async def get_conversation(conv_id: int, s: dict = Depends(_session)):
         return _err(404, "Chat not found")
     c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
     novel = await _row("SELECT id, title FROM novels WHERE id = ?", (cv["novel_id"],)) if cv["novel_id"] else None
-    msgs = await _rows("SELECT id, role, content, story_at, created_at FROM messages WHERE conversation_id = ? "
-                       "ORDER BY id", (conv_id,))
+    msgs = await _rows("SELECT id, role, content, story_at, image, image_prompt, created_at FROM messages "
+                       "WHERE conversation_id = ? ORDER BY id", (conv_id,))
     upto = next((m["created_at"] for m in msgs if m["id"] == cv["summarized_upto"]), None)
     return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs, "summary": cv["summary"],
                          "summary_upto": upto, "clock": _iso(await _scene_clock(cv)),
