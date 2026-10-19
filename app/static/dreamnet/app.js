@@ -935,7 +935,7 @@
       var c = r[0], sections = r[1], prof = c.profile || {};
       view.innerHTML =
         '<div class="create">' +
-        '<div class="preview"><div class="card" id="pv"></div></div>' +
+        '<div class="preview form"><div class="card" id="pv"></div>' + portraitSection(id, c) + "</div>" +
         '<form class="panel form" id="charForm">' +
         "<h2>" + (id ? "Edit " + esc(c.name) : "Create a character") + "</h2>" +
         '<div class="two"><label>Name<input name="name" required maxlength="60" value="' + esc(c.name) + '"></label>' +
@@ -956,7 +956,6 @@
         '<label><span class="lbl">Opening line ' + aiBtn("greeting") + ' <span class="hint">how they greet you in a new scene: &quot;words&quot;, *actions*, `thoughts`</span></span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
         '<div class="two"><label>Tags <span class="hint">comma separated</span><input name="tags" value="' + esc(c.tags) + '"></label>' +
         '<label>Portrait URL <span class="hint">optional, a photo-realistic image</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
-        portraitSection(id, c) +
         voiceSection(c) +
         '<p class="form-error" id="charErr"></p>' +
         '<div class="row"><button class="btn primary">' + (id ? "Save changes" : "Create character") + "</button>" +
@@ -1105,17 +1104,17 @@
   function portraitSection(id, c) {
     var inner = "";
     if (state.me.portrait_gen) {
-      inner = '<p class="hint">Make a portrait from the description, or upload your own photo.' + (id ? "" : " Making one creates the character first, so fill in a name and personality.") + "</p>" +
-        '<textarea id="portraitPrompt" rows="3" placeholder="Leave empty and the AI writes a photo prompt from this character\'s description.">' + esc(c.portrait_prompt || "") + "</textarea>" +
-        '<div class="row"><button type="button" class="btn primary" id="genPortrait">' + ic("wand") + ' Make it from the description</button>' +
+      inner = '<p class="hint">Make a realistic portrait from the description, or upload your own photo.' + (id ? "" : " Making one saves the character first, so fill in a name and personality.") + "</p>" +
+        '<textarea id="portraitPrompt" rows="3" placeholder="Optional: describe the photo. Leave empty and the AI uses the description.">' + esc(c.portrait_prompt || "") + "</textarea>" +
+        '<div class="row"><button type="button" class="btn primary" id="genPortrait">' + ic("wand") + ' Make it with AI</button>' +
         '<span class="hint" id="portraitStatus"></span></div>';
     } else {
       inner = '<p class="hint">Upload a realistic photo of this character.</p>';
     }
     var upload = '<div class="row"><label class="btn" id="uploadPortraitBtn">' + ic("image") +
-      ' Upload a photo from your computer<input type="file" id="uploadPortrait" accept="image/jpeg,image/png,image/webp" hidden></label>' +
+      ' Upload a photo<input type="file" id="uploadPortrait" accept="image/jpeg,image/png,image/webp" hidden></label>' +
       '<span class="hint" id="uploadStatus">JPEG, PNG or WebP, up to 10 MB. Adults only.</span></div>';
-    return '<fieldset class="cast portrait"><legend>Portrait <span class="hint">a realistic photo</span></legend>' + inner + upload + "</fieldset>";
+    return '<fieldset class="cast portrait"><legend>Photo</legend>' + inner + upload + "</fieldset>";
   }
 
   // ---------- roleplay chat ----------
