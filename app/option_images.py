@@ -1,12 +1,15 @@
 """
 Dreamnet - photos for choice tiles
 The character creator and the starting-place picker show a realistic photo on
-every choice. Photos are made once on your own ComfyUI (the same Z-Image
-workflow as portraits), one at a time, and kept on disk under
-PORTRAIT_DIR/options. Without ComfyUI the tiles show just their names.
+every choice. Photos are made once, one at a time, and kept on disk under
+PORTRAIT_DIR/options: on your own ComfyUI (the same Z-Image workflow as
+portraits) when COMFYUI_URL is set, otherwise by an online image service
+(OPTION_IMAGE_SERVICE, Pollinations by default; set it to "off" to show names only).
 """
 import asyncio
 import hashlib
+import os
+from urllib.parse import quote
 
 import app.portraits as portraits
 
@@ -42,6 +45,12 @@ TEMPLATES = {
     "place": ("Photograph of {key}, empty, no people, atmospheric, at night unless the place says otherwise.", PLACE),
 }
 
+# {prompt}, {width}, {height} and {seed} are filled in. Only the generic choice prompt is sent,
+# never anything from your characters or chats.
+ONLINE_SERVICE = os.getenv("OPTION_IMAGE_SERVICE", "https://image.pollinations.ai/prompt/{prompt}"
+                           "?width={width}&height={height}&seed={seed}&nologo=true&private=true&safe=true&model=flux")
+ONLINE_TIMEOUT = float(os.getenv("OPTION_IMAGE_TIMEOUT", "120"))
+
 _lock = asyncio.Lock()  # one picture at a time, so ComfyUI isn't flooded
 
 
@@ -66,16 +75,31 @@ async def get(client, kind: str, key: str, gender: str = "") -> bytes:
     path = path_for(prompt)
     if path.exists():
         return path.read_bytes()
-    if not portraits.enabled():
-        raise OptionImageError("Choice photos need ComfyUI (COMFYUI_URL).")
+    online = not portraits.enabled()
+    if online and ONLINE_SERVICE.strip().lower() in ("", "off", "none"):
+        raise OptionImageError("Choice photos are turned off.")
     async with _lock:
         if path.exists():  # made while this request waited
             return path.read_bytes()
         seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16)
-        try:
-            png = await portraits.generate(client, prompt, seed=seed, width=w, height=h)
-        except portraits.PortraitError as e:
-            raise OptionImageError(str(e)) from e
+        if online:
+            png = await _online(client, prompt, w, h, seed)
+        else:
+            try:
+                png = await portraits.generate(client, prompt, seed=seed, width=w, height=h)
+            except portraits.PortraitError as e:
+                raise OptionImageError(str(e)) from e
         OPTION_DIR.mkdir(parents=True, exist_ok=True)
         path.write_bytes(png)
         return png
+
+
+async def _online(client, prompt: str, w: int, h: int, seed: int) -> bytes:
+    url = ONLINE_SERVICE.format(prompt=quote(prompt, safe=""), width=w, height=h, seed=seed)
+    try:
+        r = await client.get(url, timeout=ONLINE_TIMEOUT, follow_redirects=True)
+    except Exception as e:
+        raise OptionImageError(f"The online image service didn't answer: {e}") from e
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/") or len(r.content) < 2000:
+        raise OptionImageError(f"The online image service couldn't make this picture ({r.status_code}).")
+    return r.content

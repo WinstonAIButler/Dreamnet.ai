@@ -1436,7 +1436,8 @@ async def option_image(set: str, key: str, g: str = "", s: dict = Depends(_sessi
         png = await option_images.get(api_routes.http_client, set, key, g if g in ("male", "female", "non-binary") else "")
     except option_images.OptionImageError as e:
         return _err(503, str(e))
-    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=2592000"})
+    kind = "image/jpeg" if png[:3] == b"\xff\xd8\xff" else "image/webp" if png[8:12] == b"WEBP" else "image/png"
+    return Response(png, media_type=kind, headers={"Cache-Control": "private, max-age=2592000"})
 
 
 async def _opening(s: dict, c: dict, storyline_id: int, location: str, situation: str, start: datetime) -> str:

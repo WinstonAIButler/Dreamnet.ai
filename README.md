@@ -53,8 +53,10 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   written, and you edit and export them like any novel.
 - **Realistic photos on every choice.** The creator and the place picker show a
   photorealistic picture on each tile, never emoji or cartoons. They are made
-  once on your own ComfyUI and kept in `PORTRAIT_DIR/options`; without ComfyUI
-  the tiles show their names under the Dreamnet mark.
+  once and kept in `PORTRAIT_DIR/options`: on your own ComfyUI when it's set,
+  otherwise (for example on Render) by a free online image service that only
+  ever sees the generic choice, like "a woman with curly hair". Set
+  `OPTION_IMAGE_SERVICE=off` to show names only.
 - **Detailed character profiles.** Beyond the basics, each character has a
   profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
   piercings, style, scent, voice), personality (temperament, desires, fears,
