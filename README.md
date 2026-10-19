@@ -34,13 +34,15 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   lines that match what you just wrote (from this scene and the character's
   other scenes) are put back in front of the model verbatim.
 - **Time marks and an in-story clock.** Every message shows when you wrote it,
-  and every reply ends with the in-story time, like [Current Time: Sat 11:16 AM].
-  The model estimates how long each exchange takes using built-in rules
-  (1 to 5 minutes for talk, 1.5 minutes per mile in the city, 6 to 8 hours for
-  sleep, 45 to 90 minutes for dinner, and so on) and the app does the clock
-  math, so time stays consistent through regenerates and rewinds. Use the clock
-  button in a scene to set the time, skip ahead or label a moment ("The next
-  morning, his penthouse").
+  and every reply ends with the in-story time, like *[Current Time: 02:45 AM | Day 3]*.
+  The scene header also shows the date, time of day and moon phase. The model
+  picks how long each exchange took from the action-time table (dialogue,
+  driving, blood feeding, rituals, combat, potions, spellcasting, intimacy,
+  meals, sleep) and the app does the clock math, so time stays consistent
+  through regenerates and rewinds. Edit the table and the pace (0.5x slow,
+  1.0x real, 1.5x fast) on the **Time rules** page. Use the clock button in a
+  scene to set the time, skip ahead or label a moment ("The next morning, his
+  penthouse").
 - **Lifelike portraits.** One click turns a character card into a photorealistic
   portrait, using the Z-Image-Turbo workflow from Intel AI Playground on your
   own ComfyUI.

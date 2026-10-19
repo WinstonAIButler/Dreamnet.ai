@@ -124,6 +124,12 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE INDEX IF NOT EXISTS idx_memories_char ON memories(character_id, id);
 
+-- Key/value settings for the studio (time rules).
+CREATE TABLE IF NOT EXISTS studio_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL,
@@ -225,23 +231,73 @@ ASSIST_LENGTH = {"short": 350, "medium": 750, "long": 1400}
 # stays consistent through regenerates and rewinds.
 DEFAULT_MINUTES = 3
 MAX_SKIP_MINUTES = 7 * 24 * 60
-TIME_RULES = """[TIME MANAGEMENT PROTOCOL]
-The current in-universe time is given above, and the app shows it after every reply. Before writing, work out how
-much in-universe time the user's action and your reply take together, using these rules:
-- Standard dialogue, texting or a minor action: 1 to 5 minutes (casual back-and-forth is 1 to 3 minutes).
-- Short-distance driving (city, errands): 1.5 minutes per mile. Long-distance driving (highway): 1 minute per mile.
-- Power nap: 20 to 30 minutes. Full sleep or overnight: 6 to 8 hours.
-- Intimacy, foreplay or mild (flirting, making out, building tension): 15 to 30 minutes.
-- Intimacy, full sexual acts including the cool-down after: 30 to 60 minutes.
-- Quick snack or coffee: 5 to 10 minutes. Sit-down dinner or cooking a full meal: 45 to 90 minutes.
-If hours pass (sleep, a long drive), describe the transition in the narrative. Keep time consistent: a character who
-falls asleep at 11:00 PM for 8 hours wakes at 7:00 AM. Never contradict the current time (daylight, meals, how late
-it is). End every reply with one final line, exactly like [Time passed: 4 minutes] or [Time passed: 7 hours 30
-minutes], and do not write the current time yourself."""
+PACES = (0.5, 1.0, 1.5)  # 0.5x slow, 1.0x real, 1.5x fast: multiplies every time cost
 
-_TIME_TAG = re.compile(r"\[\s*(?:time passed|elapsed time|current time)\s*:[^\]]*\]", re.IGNORECASE)
+# Action-time formulas, editable on the Time rules page. Minutes; under 1 means seconds.
+DEFAULT_TIME_ACTIONS = [
+    {"label": "Standard dialogue or minor action", "min": 1, "max": 5, "per": "message", "context": "Talking, reacting, small movements."},
+    {"label": "Messaging / texting", "min": 1, "max": 3, "per": "exchange", "context": "Stalking, sending threatening or teasing texts."},
+    {"label": "Short-distance driving", "min": 1.5, "max": 1.5, "per": "mile", "context": "Navigating city streets, pursuing a target."},
+    {"label": "Long-distance driving", "min": 1, "max": 1, "per": "mile", "context": "Fleeing to an isolated cabin or safehouse."},
+    {"label": "Blood feeding (quick)", "min": 3, "max": 5, "per": "", "context": "A frantic, rough bite in an alleyway or corridor."},
+    {"label": "Blood feeding (sensual)", "min": 15, "max": 30, "per": "", "context": "Slow, intimate or predatory feeding mixed with skin-to-skin contact."},
+    {"label": "Sacrifices / dark rituals", "min": 60, "max": 180, "per": "", "context": "Chanting, preparation and execution of a blood rite."},
+    {"label": "Combat / physical altercations", "min": 0.17, "max": 0.5, "per": "round", "context": "2 to 5 minutes total. Brutal, fast fights, restraints, subduing a target."},
+    {"label": "Crafting potions or poisons", "min": 30, "max": 120, "per": "", "context": "Brewing toxins, grinding herbs, preparing aphrodisiacs."},
+    {"label": "Spellcasting (quick)", "min": 0.17, "max": 0.5, "per": "", "context": "Hexes, mind control, shadow manipulation in the moment."},
+    {"label": "Intimacy (foreplay / mild)", "min": 15, "max": 30, "per": "", "context": "Heavy petting, teasing, dark psychological tension building."},
+    {"label": "Intimacy (full sexual acts)", "min": 30, "max": 90, "per": "", "context": "The main event, multiple rounds, prolonged intense encounters."},
+    {"label": "Meal (quick snack or coffee)", "min": 5, "max": 10, "per": "", "context": "Grabbing coffee, eating on the move."},
+    {"label": "Meal (sit-down dinner)", "min": 45, "max": 90, "per": "", "context": "Restaurant dining, cooking a full meal."},
+    {"label": "Power nap", "min": 20, "max": 30, "per": "", "context": "A quick reset."},
+    {"label": "Sleep (restless / forced)", "min": 240, "max": 360, "per": "", "context": "Passing out from exhaustion, trauma or being drugged."},
+    {"label": "Sleep (full overnight)", "min": 360, "max": 480, "per": "", "context": "Fast-forwarding to the next evening or night."},
+]
+
+
+def _span(minutes: float) -> str:
+    """3 -> "3 minutes", 0.17 -> "10 seconds", 90 -> "1 hour 30 minutes"."""
+    if minutes < 1:
+        return f"{round(minutes * 60)} seconds"
+    h, m = divmod(round(minutes), 60)
+    return " ".join(p for p in (f"{h} hour{'s' if h != 1 else ''}" if h else "",
+                                f"{m} minute{'s' if m != 1 else ''}" if m else "") if p) or "0 minutes"
+
+
+def _time_rules(actions: list[dict]) -> str:
+    """The time protocol for the system prompt, built from the action-time table."""
+    table = "\n".join(
+        f"   - {a['label']}: " + (_span(a["min"]) if a["min"] == a["max"] else f"{_span(a['min'])} to {_span(a['max'])}")
+        + (f" per {a['per']}" if a.get("per") else "") + (f". {a['context']}" if a.get("context") else "")
+        for a in actions)
+    return f"""[TIME MANAGEMENT PROTOCOL - CRITICAL]
+1. Track the in-universe time and Day meticulously. The current time, Day, time of day and moon phase are given
+   above, and the app prints the time at the end of every reply as *[Current Time: 02:45 AM | Day 3]*, so never
+   write that line yourself.
+2. Before writing, evaluate the actions taken by both the user and you, and work out how much in-universe time they
+   take together, using these action-time formulas:
+{table}
+3. Dark romance pacing: do not rush intimacy, combat or feeding scenes. When an act is prolonged, let it run across
+   several replies, each covering only the time it actually describes, so the clock reflects time passing
+   naturally rather than jumping to the end of the act.
+4. Keep time consistent. If a character is knocked out or goes to sleep at 03:00 AM for 5 hours, the next reply
+   starts at exactly 08:00 AM. Never contradict the current time, the Day, daylight or darkness, or the moon.
+5. If an action skips hours (long drives, deep sleep, complex rituals), write the narrative transition describing
+   the passage of time before the time moves on.
+End every reply with one final line stating only how much time passed, exactly like [Time passed: 4 minutes],
+[Time passed: 40 seconds] or [Time passed: 5 hours]. The app adds it to the clock and prints the new time."""
+
+
+async def _time_settings() -> dict:
+    row = await _row("SELECT value FROM studio_settings WHERE key = 'time_rules'")
+    data = json.loads(row["value"]) if row else {}
+    return {"pace": data.get("pace", 1.0), "actions": data.get("actions") or DEFAULT_TIME_ACTIONS}
+
+
+_TIME_TAG = re.compile(r"[*_]*\[\s*(?:time passed|elapsed time|current time)\s*:[^\]]*\][*_]*", re.IGNORECASE)
 _PASSED = re.compile(r"\[\s*(?:time passed|elapsed time)\s*:([^\]]*)\]", re.IGNORECASE)
-_UNITS = re.compile(r"(\d+(?:\.\d+)?)\s*(days?|d\b|hours?|hrs?|h\b|minutes?|mins?|m\b)", re.IGNORECASE)
+_UNITS = re.compile(r"(\d+(?:\.\d+)?)\s*(days?|d\b|hours?|hrs?|h\b|minutes?|mins?|m\b|seconds?|secs?|s\b)",
+                    re.IGNORECASE)
 
 
 async def init_studio_db(db_path: str):
@@ -395,7 +451,7 @@ def _history_window(history: list[dict]) -> list[dict]:
     return list(reversed(out))
 
 
-def _chat_turns(window: list[dict]) -> list[dict]:
+def _chat_turns(window: list[dict], start: str = "") -> list[dict]:
     """Turn a history window into chat messages: story-time marks become a note on
     the user's side, and same-role neighbours are merged, since some chat templates
     (Mistral's) require user and assistant turns to alternate."""
@@ -404,9 +460,9 @@ def _chat_turns(window: list[dict]) -> list[dict]:
         role, content = m["role"], m["content"]
         if role == "mark":
             role, content = "user", f"[Story time: {content}" + (
-                f" | now {_clock_text(m['story_at'])}]" if m.get("story_at") else "]")
+                f" | now {_clock_text(m['story_at'], start)}]" if m.get("story_at") else "]")
         elif role == "assistant" and m.get("story_at"):
-            content += f"\n[Current Time: {_clock_text(m['story_at'])}]"
+            content += "\n" + _now_line(m["story_at"], start)
         if out and out[-1]["role"] == role:
             out[-1]["content"] += "\n\n" + content
         else:
@@ -414,32 +470,66 @@ def _chat_turns(window: list[dict]) -> list[dict]:
     return out
 
 
-def _clock_text(iso: str) -> str:
-    """In-universe time as shown in scenes: Fri Oct 18, 11:40 PM."""
+def _day(iso: str, start: str) -> int:
+    """Day number of the scene: the day it starts on is Day 1."""
+    if not iso or not start:
+        return 1
+    return max(1, (datetime.fromisoformat(iso).date() - datetime.fromisoformat(start).date()).days + 1)
+
+
+def _clock_text(iso: str, start: str = "") -> str:
+    """In-universe time: "Fri Oct 16, 11:40 PM", or "Day 2, Sat Oct 17, 02:45 AM" when the scene start is known."""
     if not iso:
         return ""
     d = datetime.fromisoformat(iso)
-    return d.strftime("%a %b %d, ") + d.strftime("%I:%M %p").lstrip("0")
+    return (f"Day {_day(iso, start)}, " if start else "") + d.strftime("%a %b %d, %I:%M %p")
+
+
+def _now_line(iso: str, start: str) -> str:
+    """The line the app prints after every reply: *[Current Time: 02:45 AM | Day 3]*."""
+    return f"*[Current Time: {datetime.fromisoformat(iso).strftime('%I:%M %p')} | Day {_day(iso, start)}]*"
+
+
+async def _scene_start(conv_id: int) -> str:
+    """In-universe time the scene began (its first stamped message)."""
+    first = await _row("SELECT story_at FROM messages WHERE conversation_id = ? AND story_at != '' "
+                       "ORDER BY id LIMIT 1", (conv_id,))
+    return first["story_at"] if first else ""
 
 
 def _iso(d: datetime) -> str:
-    return d.replace(second=0, microsecond=0).isoformat(timespec="minutes")
+    return d.replace(microsecond=0).isoformat(timespec="seconds")
 
 
-def _elapsed(reply: str) -> tuple[str, int]:
-    """Strip the time tags from a reply; return the clean text and the minutes that passed."""
+_PHASES = ("New moon", "Waxing crescent", "First quarter", "Waxing gibbous", "Full moon", "Waning gibbous",
+           "Last quarter", "Waning crescent")
+
+
+def _moon(d: datetime) -> str:
+    """Moon phase for a date, from the mean synodic month since the new moon of 6 Jan 2000."""
+    age = ((d - datetime(2000, 1, 6, 18, 14)).total_seconds() / 86400) % 29.530588853
+    return _PHASES[int(age / 29.530588853 * 8 + 0.5) % 8]
+
+
+def _daypart(d: datetime) -> str:
+    h = d.hour
+    return "night" if h >= 21 or h < 5 else "dawn" if h < 7 else "day" if h < 18 else "dusk"
+
+
+def _elapsed(reply: str, pace: float = 1.0) -> tuple[str, float]:
+    """Strip the time tags from a reply; return the clean text and the minutes that passed, times the pace."""
     minutes = None
     tag = _PASSED.findall(reply)
     if tag:
         total = 0.0
         for n, unit in _UNITS.findall(tag[-1]):
             u = unit.lower()[0]
-            total += float(n) * (1440 if u == "d" else 60 if u == "h" else 1)
-        minutes = round(total) if _UNITS.search(tag[-1]) else None
+            total += float(n) * (1440 if u == "d" else 60 if u == "h" else 1 / 60 if u == "s" else 1)
+        minutes = total if _UNITS.search(tag[-1]) else None
     clean = _TIME_TAG.sub("", reply).rstrip()
     if minutes is None:
         minutes = DEFAULT_MINUTES
-    return clean or reply, max(0, min(minutes, MAX_SKIP_MINUTES))
+    return clean or reply, max(0.0, min(minutes * pace, MAX_SKIP_MINUTES))
 
 
 async def _scene_clock(cv: dict) -> datetime:
@@ -631,13 +721,13 @@ def _parse_memory_json(text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _transcript(msgs: list[dict], name: str, username: str) -> tuple[str, dict[int, str]]:
+def _transcript(msgs: list[dict], name: str, username: str, start: str = "") -> tuple[str, dict[int, str]]:
     """Numbered, time-marked transcript lines, plus the story time in force at each message."""
     lines, story, story_at = [], "", {}
     for m in msgs:
         stamp = _stamp(m["created_at"])
         if m.get("story_at"):
-            story = _clock_text(m["story_at"])
+            story = _clock_text(m["story_at"], start)
             stamp += f" | story time {story}"
         if m["role"] == "mark":
             story = f"{m['content']}, {story}" if m.get("story_at") else m["content"]
@@ -690,10 +780,11 @@ async def compact_conversation(conv_id: int, user_id: int, username: str):
         return
     known = [m["content"] for m in await _rows("SELECT content FROM memories WHERE character_id = ? ORDER BY id",
                                                 (c["id"],))]
-    transcript, story_at = _transcript(older, c["name"], username)
+    start = await _scene_start(conv_id)
+    transcript, story_at = _transcript(older, c["name"], username, start)
     while len(transcript) > 16000 and len(older) > COMPACT_EVERY:
         older = older[:len(older) * 3 // 4]  # fold the rest on the next pass instead of truncating it
-        transcript, story_at = _transcript(older, c["name"], username)
+        transcript, story_at = _transcript(older, c["name"], username, start)
     messages = [
         {"role": "system", "content":
             "You keep exact continuity notes for an ongoing role-play. Use only what the transcript and the story "
@@ -702,7 +793,7 @@ async def compact_conversation(conv_id: int, user_id: int, username: str):
             '{"summary": "...", "memories": [{"fact": "...", "quote": "...", "msg": 123}]}. '
             '"summary" is the updated story so far: the earlier summary followed by the new events, in order, one '
             "short line per event, each starting with its time mark in brackets, like [Oct 18, 2026 9:04 PM] or, "
-            "its in-universe story time, like [Fri Oct 18, 11:40 PM]. Keep names, numbers, places and promises "
+            "its in-universe story time, like [Day 2, Sat Oct 17, 02:45 AM]. Keep names, numbers, places and promises "
             f'exactly as written. "memories" lists up to 5 NEW lasting facts {c["name"]} would remember about '
             f"{username} or their relationship (names, preferences, secrets, promises, turning points). For each, "
             '"fact" is one short sentence, "quote" is the exact words copied from the transcript that prove it '
@@ -836,7 +927,9 @@ async def get_conversation(conv_id: int, s: dict = Depends(_session)):
                        "ORDER BY id", (conv_id,))
     upto = next((m["created_at"] for m in msgs if m["id"] == cv["summarized_upto"]), None)
     return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs, "summary": cv["summary"],
-                         "summary_upto": upto, "clock": _iso(await _scene_clock(cv))})
+                         "summary_upto": upto, "clock": _iso(await _scene_clock(cv)),
+                         "start": await _scene_start(conv_id)})
+
 
 
 @router.delete("/conversations/{conv_id}")
@@ -861,6 +954,38 @@ async def delete_message(msg_id: int, s: dict = Depends(_session)):
     # Rewinding past summarized messages invalidates the scene summary.
     await _exec("UPDATE conversations SET summary = '', summarized_upto = 0 WHERE id = ? AND summarized_upto >= ?",
                 (m["conversation_id"], msg_id))
+    return JSONResponse({"ok": True})
+
+
+@router.get("/time-rules")
+async def get_time_rules(s: dict = Depends(_session)):
+    return JSONResponse({**await _time_settings(), "defaults": DEFAULT_TIME_ACTIONS, "paces": PACES})
+
+
+@router.put("/time-rules")
+async def save_time_rules(request: Request, s: dict = Depends(_session)):
+    body = await request.json()
+    try:
+        pace = float(body.get("pace") or 1.0)
+        actions = []
+        for a in (body.get("actions") or [])[:40]:
+            label = str(a.get("label") or "").strip()[:80]
+            lo, hi = float(a.get("min") or 0), float(a.get("max") or 0)
+            if not label:
+                continue
+            if not (0 <= lo <= hi <= MAX_SKIP_MINUTES):
+                return _err(400, f"Check the minutes for “{label}”: the minimum must be 0 or more and not above the maximum.")
+            actions.append({"label": label, "min": lo, "max": hi, "per": str(a.get("per") or "").strip()[:30],
+                            "context": str(a.get("context") or "").strip()[:200]})
+    except (TypeError, ValueError):
+        return _err(400, "Minutes must be numbers.")
+    if pace not in PACES:
+        return _err(400, "Pick a pace of 0.5x, 1.0x or 1.5x.")
+    if not actions:
+        return _err(400, "Keep at least one action.")
+    await _exec("INSERT INTO studio_settings (key, value) VALUES ('time_rules', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (json.dumps({"pace": pace, "actions": actions}),))
     return JSONResponse({"ok": True})
 
 
@@ -963,16 +1088,20 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
                                 + (f" | story time {_clock_text(m['story_at'])}" if m["story_at"] else "")
                                 + f"] {m['who']}: {m['content']}" for m in recalled) + "\n")
     marks = [m for m in history if m["role"] == "mark"]
-    system += (f"\nCurrent in-universe time: {_clock_text(_iso(clock))}"
-               + (f" (latest story mark: {marks[-1]['content']})" if marks else "") + "\n\n" + TIME_RULES + "\n")
+    start = next((m["story_at"] for m in history if m["story_at"]), _iso(clock))
+    tset = await _time_settings()
+    system += (f"\nCurrent in-universe time: {_clock_text(_iso(clock), start)}, {_daypart(clock)}, "
+               f"moon: {_moon(clock).lower()}"
+               + (f" (latest story mark: {marks[-1]['content']})" if marks else "") + "\n\n"
+               + _time_rules(tset["actions"]) + "\n")
     system += (f"\nContinuity: keep every detail consistent with the memories, summary and exact lines above "
                "(names, dates, places, promises, who did what). Never invent past events that aren't there; if "
                f"{c['name']} isn't sure, they stay vague instead of making it up.\n\n" + SAFETY_RULES)
 
-    messages = [{"role": "system", "content": system}] + _chat_turns(window)
+    messages = [{"role": "system", "content": system}] + _chat_turns(window, start)
 
     async def save(reply):
-        reply, minutes = _elapsed(reply)
+        reply, minutes = _elapsed(reply, float(tset["pace"]))
         await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
                     (conv_id, "assistant", reply, _iso(clock + timedelta(minutes=minutes)), time.time()))
         asyncio.create_task(compact_conversation(conv_id, s["user_id"], s["username"]))

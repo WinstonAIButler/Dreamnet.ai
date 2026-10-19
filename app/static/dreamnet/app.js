@@ -119,15 +119,35 @@
     return new Date(ts * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) + " " + clock(ts);
   }
   // In-universe clock, stored as "2026-10-18T23:40" (no time zone).
-  function storyClock(iso, full) {
+  function hhmm(d) {
+    var h = d.getHours() % 12 || 12, m = d.getMinutes();
+    return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m + (d.getHours() < 12 ? " AM" : " PM");
+  }
+  // Day 1 is the day the scene starts on.
+  function storyDay(iso, start) {
+    if (!iso || !start) return 1;
+    var a = new Date(start.slice(0, 10) + "T00:00"), b = new Date(iso.slice(0, 10) + "T00:00");
+    return Math.max(1, Math.round((b - a) / 86400000) + 1);
+  }
+  function storyClock(iso, start, full) {
     if (!iso) return "";
     var d = new Date(iso);
-    var t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    return full ? d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + ", " + t
-      : d.toLocaleDateString([], { weekday: "short" }) + " " + t;
+    return "Day " + storyDay(iso, start) + (full ? " · " + d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + ", " : " · ") + hhmm(d);
+  }
+  // Time of day and moon phase, the same rules the server gives the model.
+  var PHASES = [["New moon", "🌑"], ["Waxing crescent", "🌒"], ["First quarter", "🌓"], ["Waxing gibbous", "🌔"],
+    ["Full moon", "🌕"], ["Waning gibbous", "🌖"], ["Last quarter", "🌗"], ["Waning crescent", "🌘"]];
+  function sky(iso) {
+    var d = new Date(iso), h = d.getHours();
+    var age = (((d - new Date(2000, 0, 6, 18, 14)) / 86400000) % 29.530588853 + 29.530588853) % 29.530588853;
+    var p = PHASES[Math.floor(age / 29.530588853 * 8 + 0.5) % 8];
+    return { part: h >= 21 || h < 5 ? "Night" : h < 7 ? "Dawn" : h < 18 ? "Day" : "Dusk", moon: p[0], icon: p[1] };
+  }
+  function nowLine(iso, start) {
+    return "[Current Time: " + hhmm(new Date(iso)) + " | Day " + storyDay(iso, start) + "]";
   }
   function stripTimeTags(text, typing) {
-    text = String(text || "").replace(/\[\s*(time passed|elapsed time|current time)\s*:[^\]]*\]/gi, "");
+    text = String(text || "").replace(/[*_]*\[\s*(time passed|elapsed time|current time)\s*:[^\]]*\][*_]*/gi, "");
     return (typing ? text.replace(/\[[^\]]*$/, "") : text).replace(/\s+$/, "");
   }
   function dayLabel(ts) {
@@ -189,6 +209,7 @@
     [/^#?\/?$/, viewHome],
     [/^#\/characters$/, viewCharacters],
     [/^#\/character\/new$/, function () { viewCharacterForm(null); }],
+    [/^#\/time-rules$/, viewTimeRules],
     [/^#\/character\/(\d+)$/, function (m) { viewCharacterForm(+m[1]); }],
     [/^#\/chats$/, function () { viewChat(null); }],
     [/^#\/chat\/(\d+)$/, function (m) { viewChat(+m[1]); }],
@@ -399,7 +420,7 @@
         '<label>or skip ahead<span class="row"><input type="number" id="skipH" min="0" max="672" placeholder="0"> h ' +
         '<input type="number" id="skipM" min="0" max="59" placeholder="0"> min</span></label>' +
         '<label class="grow">Label (optional)<input id="clockLabel" maxlength="120" placeholder="The next morning, his penthouse"></label>' +
-        '<button class="btn small primary">Mark time</button></form>' +
+        '<button class="btn small primary">Mark time</button><a class="btn small ghost" href="#/time-rules">Time rules</a></form>' +
         '<div class="messages" id="msgs"></div>' +
         '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Write your reply. Use *asterisks* for actions."></textarea>' +
         '<button class="btn primary" id="sendBtn">Send</button></form>' +
@@ -417,20 +438,23 @@
       }
       function render() {
         var lastDay = "";
-        document.getElementById("clockNow").textContent = storyClock(currentClock(), true);
+        var start = conv.start || currentClock();
+        var sk = sky(currentClock());
+        document.getElementById("clockNow").textContent = storyClock(currentClock(), start, true) + " · " + sk.part + " · " + sk.icon;
+        document.getElementById("clockBtn").title = "In-story time. " + sk.part + ", " + sk.moon.toLowerCase() + ". Set the clock or skip ahead.";
         msgs.innerHTML = list.map(function (m, i) {
           var isLast = i === list.length - 1;
           var ts = m.created_at || Date.now() / 1000;
           var day = dayLabel(ts), head = "";
           if (day !== lastDay) { head = '<div class="day-mark"><span>' + esc(day) + "</span></div>"; lastDay = day; }
           if (m.role === "mark") {
-            return head + '<div class="story-mark"><span>⏱ ' + esc(m.content) + (m.story_at ? " · " + esc(storyClock(m.story_at, true)) : "") +
+            return head + '<div class="story-mark"><span>⏱ ' + esc(m.content) + (m.story_at ? " · " + esc(storyClock(m.story_at, start, true)) : "") +
               '</span><time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + '</time><button data-delmark="' + m.id + '" title="Remove this time mark">×</button></div>';
           }
           return head + '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
             '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
-            (m.role === "assistant" && m.story_at ? '<div class="now">[Current Time: ' + esc(storyClock(m.story_at)) + "]</div>" : "") + "</div>" +
-            (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at)) + "</time>" : "") +
+            (m.role === "assistant" && m.story_at ? '<div class="now">' + esc(nowLine(m.story_at, start)) + "</div>" : "") + "</div>" +
+            (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
               '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time>" +
               (m.role === "assistant" && isLast && i > 0 ? '<button data-regen="' + m.id + '">↻ Regenerate</button>' : "") +
               (conv.novel && m.role === "assistant" ? '<button data-tochapter="' + i + '">＋ Add to chapter</button>' : "") +
@@ -551,6 +575,64 @@
         if (!confirm("Delete this scene?")) return;
         api("/app/api/conversations/" + convId, { method: "DELETE" }).then(function () { location.hash = "#/chats"; });
       };
+    });
+  }
+
+  // Time rules: the action-time table and pace the roleplay clock uses.
+  function viewTimeRules() {
+    setNav("chats");
+    view.className = "";
+    api("/app/api/time-rules").then(function (cfg) {
+      var rows = cfg.actions.map(function (a) { return Object.assign({}, a); }), pace = cfg.pace;
+      function fmt(m) { return m < 1 ? Math.round(m * 60) + " s" : m >= 60 && m % 60 === 0 ? m / 60 + " h" : m + " min"; }
+      function draw() {
+        view.innerHTML =
+          '<form class="panel form time-rules" id="trForm"><h2>Time rules</h2>' +
+          '<p class="hint">How much in-story time each kind of action takes. The AI picks a value in the range for what ' +
+          "happened, the app adds it to the scene clock and prints <i>[Current Time: 02:45 AM | Day 3]</i> after every reply. " +
+          "Times are in minutes; use decimals for seconds (0.5 = 30 seconds).</p>" +
+          '<div class="seg" role="group" aria-label="Pace">' + cfg.paces.map(function (p) {
+            return '<button type="button" data-pace="' + p + '" class="' + (p === pace ? "on" : "") + '">' + p.toFixed(1) + "x " +
+              (p < 1 ? "Slow" : p > 1 ? "Fast" : "Real") + "</button>";
+          }).join("") + "</div>" +
+          '<div class="tr-rows">' + rows.map(function (a, i) {
+            return '<div class="tr-row" data-i="' + i + '">' +
+              '<input data-k="label" value="' + esc(a.label) + '" aria-label="Action" class="tr-label">' +
+              '<span class="tr-range"><input data-k="min" type="number" min="0" step="any" value="' + a.min + '" aria-label="Minimum minutes"> to ' +
+              '<input data-k="max" type="number" min="0" step="any" value="' + a.max + '" aria-label="Maximum minutes"> min</span>' +
+              '<input data-k="per" value="' + esc(a.per) + '" placeholder="per…" aria-label="Per" class="tr-per">' +
+              '<input data-k="context" value="' + esc(a.context) + '" placeholder="Context" aria-label="Context" class="tr-ctx">' +
+              '<small class="tr-show">' + esc(a.min === a.max ? fmt(a.min) : fmt(a.min) + " – " + fmt(a.max)) + (a.per ? " / " + esc(a.per) : "") + "</small>" +
+              '<button type="button" class="btn small ghost" data-del="' + i + '" title="Remove">×</button></div>';
+          }).join("") + "</div>" +
+          '<div class="row"><button type="button" class="btn small" id="trAdd">+ Add action</button>' +
+          '<button type="button" class="btn small ghost" id="trReset">Reset to defaults</button>' +
+          '<span class="grow"></span><button class="btn primary">Save time rules</button></div>' +
+          '<p class="form-error" id="trErr"></p></form>';
+        var form = document.getElementById("trForm");
+        form.oninput = function (e) {
+          var row = e.target.closest(".tr-row");
+          if (!row) return;
+          var a = rows[+row.dataset.i], k = e.target.dataset.k;
+          a[k] = k === "min" || k === "max" ? parseFloat(e.target.value) || 0 : e.target.value;
+          row.querySelector(".tr-show").textContent = (a.min === a.max ? fmt(a.min) : fmt(a.min) + " – " + fmt(a.max)) + (a.per ? " / " + a.per : "");
+        };
+        form.onclick = function (e) {
+          var b = e.target.closest("button");
+          if (!b) return;
+          if (b.dataset.pace) { pace = +b.dataset.pace; draw(); }
+          else if (b.dataset.del) { rows.splice(+b.dataset.del, 1); draw(); }
+          else if (b.id === "trAdd") { rows.push({ label: "", min: 1, max: 5, per: "", context: "" }); draw(); }
+          else if (b.id === "trReset") { rows = cfg.defaults.map(function (a) { return Object.assign({}, a); }); pace = 1; draw(); }
+        };
+        form.onsubmit = function (e) {
+          e.preventDefault();
+          api("/app/api/time-rules", { method: "PUT", body: { pace: pace, actions: rows } })
+            .then(function () { toast("Time rules saved"); history.back(); })
+            .catch(function (err) { document.getElementById("trErr").textContent = err.message; });
+        };
+      }
+      draw();
     });
   }
 
