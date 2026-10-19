@@ -26,6 +26,14 @@ ZIMAGE_UNET = os.getenv("ZIMAGE_UNET", "z_image_turbo_bf16.safetensors")
 ZIMAGE_CLIP = os.getenv("ZIMAGE_CLIP", "qwen_3_4b.safetensors")
 ZIMAGE_VAE = os.getenv("ZIMAGE_VAE", "ae.safetensors")
 
+# Without ComfyUI (as on a hosted server), character portraits are made by an online image
+# service instead. {prompt}, {width}, {height} and {seed} are filled in. Only the portrait prompt
+# written from the character card is sent, never chats. Set PORTRAIT_SERVICE=off to turn it off.
+ONLINE_SERVICE = os.getenv("PORTRAIT_SERVICE", "https://image.pollinations.ai/prompt/{prompt}"
+                           "?width={width}&height={height}&seed={seed}&nologo=true&private=true&safe=true&model=flux")
+ONLINE_TIMEOUT = float(os.getenv("PORTRAIT_SERVICE_TIMEOUT", "180"))
+ONLINE_PROMPT_CHARS = 1500  # keeps the request URL a sane length
+
 # 3:4 portrait at about 1 megapixel, from the preset's resolution table.
 WIDTH, HEIGHT = 896, 1152
 # Scene pictures are landscape, 3:2-ish at about 1 megapixel.
@@ -117,6 +125,33 @@ def build_workflow(prompt: str, seed: int | None = None, width: int = WIDTH, hei
     return wf
 
 
+def online_enabled() -> bool:
+    return ONLINE_SERVICE.strip().lower() not in ("", "off", "none")
+
+
+def can_make_portraits() -> bool:
+    """Character portraits work with ComfyUI or, failing that, the online service."""
+    return enabled() or online_enabled()
+
+
+async def make_portrait(client: httpx.AsyncClient, prompt: str) -> bytes:
+    """A character portrait: on ComfyUI when it's set up, otherwise from the online service."""
+    if enabled():
+        return await generate(client, prompt)
+    if not online_enabled():
+        raise PortraitError("Portrait generation is off. Upload a photo instead.")
+    from urllib.parse import quote
+    url = ONLINE_SERVICE.format(prompt=quote(prompt[:ONLINE_PROMPT_CHARS], safe=""), width=WIDTH, height=HEIGHT,
+                                seed=random.randint(1, 2**31 - 1))
+    try:
+        r = await client.get(url, timeout=ONLINE_TIMEOUT, follow_redirects=True)
+    except Exception as e:
+        raise PortraitError(f"The online image service didn't answer ({type(e).__name__}). Try again.") from e
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/") or len(r.content) < 2000:
+        raise PortraitError(f"The online image service couldn't make this portrait ({r.status_code}). Try again.")
+    return r.content
+
+
 async def generate(client: httpx.AsyncClient, prompt: str, seed: int | None = None,
                    width: int = WIDTH, height: int = HEIGHT) -> bytes:
     """Queue the workflow on ComfyUI, wait for it, and return the PNG bytes."""
@@ -158,9 +193,9 @@ async def generate(client: httpx.AsyncClient, prompt: str, seed: int | None = No
     raise PortraitError("Timed out waiting for ComfyUI.")
 
 
-def save(character_id: int, png: bytes, kind: str = "character") -> str:
+def save(character_id: int, png: bytes, kind: str = "character", ext: str = "png") -> str:
     """Store a portrait (or a scene picture, kind="scene") and return the URL path the web app uses."""
     PORTRAIT_DIR.mkdir(parents=True, exist_ok=True)
-    name = f"{kind}-{character_id}-{secrets.token_hex(4)}.png"
+    name = f"{kind}-{character_id}-{secrets.token_hex(4)}.{ext}"
     (PORTRAIT_DIR / name).write_bytes(png)
     return f"/portraits/{name}"

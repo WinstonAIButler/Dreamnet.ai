@@ -775,7 +775,8 @@ async def me(request: Request):
     if not s:
         return JSONResponse({"authenticated": False})
     return JSONResponse({"authenticated": True, "username": s["username"], "is_admin": bool(s["is_admin"]),
-                         "default_model": DEFAULT_MODEL, "portraits": portraits.enabled()})
+                         "default_model": DEFAULT_MODEL, "portraits": portraits.enabled(),
+                         "portrait_gen": portraits.can_make_portraits()})
 
 
 @router.get("/models")
@@ -968,8 +969,8 @@ async def make_portrait(cid: int, request: Request, s: dict = Depends(_session))
     c = await _row("SELECT * FROM characters WHERE id = ?", (cid,))
     if not c:
         return _err(404, "Character not found")
-    if not portraits.enabled():
-        return _err(503, "Portraits need a ComfyUI server. Set COMFYUI_URL in .env (see README).")
+    if not portraits.can_make_portraits():
+        return _err(503, "Portrait generation is off. Upload a photo instead.")
     body = await request.json()
     prompt = str(body.get("prompt") or "").strip()[:4000]
     if not prompt:
@@ -977,13 +978,40 @@ async def make_portrait(cid: int, request: Request, s: dict = Depends(_session))
     if mentions_minor(prompt, strict=True):
         return _err(400, "Portraits must show an adult.")
     try:
-        png = await portraits.generate(api_routes.http_client, prompt)
+        png = await portraits.make_portrait(api_routes.http_client, prompt)
     except portraits.PortraitError as e:
         return _err(502, str(e))
-    url = portraits.save(cid, png)
+    url = portraits.save(cid, png, ext=_image_ext(png) or "png")
     await _exec("UPDATE characters SET avatar = ?, portrait_prompt = ?, updated_at = ? WHERE id = ?",
                 (url, prompt, time.time(), cid))
     return JSONResponse({"avatar": url, "prompt": prompt})
+
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _image_ext(data: bytes) -> str | None:
+    """File extension for a JPEG, PNG or WebP upload, judged by its bytes, not its name."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+@router.post("/portraits/upload")
+async def upload_portrait(request: Request, s: dict = Depends(_session)):
+    """Store a picture the user uploads (raw image bytes in the body) and return its URL.
+    It isn't tied to a character yet, so it works while a new character is still being made."""
+    data = await request.body()
+    if len(data) > MAX_UPLOAD_BYTES:
+        return _err(413, "That picture is too big. Use one under 10 MB.")
+    ext = _image_ext(data)
+    if not ext:
+        return _err(400, "Upload a JPEG, PNG or WebP picture.")
+    return JSONResponse({"avatar": portraits.save(s["user_id"], data, "upload", ext)})
 
 
 async def _portrait_prompt(request: Request, s: dict, c: dict) -> str:
