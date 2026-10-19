@@ -246,17 +246,18 @@ LIFELIKE_RULES = (
 # The character has to engage with what the user just wrote: answer their questions, react to what
 # they did, and follow their out-of-character directions.
 ANSWER_RULES = (
-    "Most important: every reply responds directly to {user}'s latest message. If {user} asks {name} a question, "
-    "{name} answers it in that reply, in character, clearly and specifically, before anything else happens. If "
-    "{user} says or does something, {name} reacts to exactly that. Never ignore, dodge or change the subject from "
+    "Most important: every reply responds directly to {user}'s latest message. If {user} asks a question, "
+    "the character it is addressed to ({name} unless {user} is talking to someone else) answers it in that reply, in character, clearly and specifically, before anything else happens. If "
+    "{user} says or does something, {name} and anyone else present react to exactly that. Never ignore, dodge or change the subject from "
     "what {user} just wrote. In {user}'s messages, \"quotes\" are spoken aloud, *asterisks* are actions, and "
     "`backticks` are {user}'s private thoughts, which {name} cannot hear but can read from their face. Text in "
     "(parentheses), [brackets] or starting with OOC: is {user} talking to you, the writer, out of character: "
-    "follow those directions (where the story goes, what happens next, how {name} should act) and keep writing "
+    "follow those directions (where the story goes, what happens next, how {name} or anyone else should act, who else appears) and keep writing "
     "the story; only answer out of character if they ask a question about the story itself."
 )
-ANSWER_NUDGE = ("[Respond as {name} to the message above: answer any question in it directly and react to what "
-                "was said and done. Follow any out-of-character direction.]")
+ANSWER_NUDGE = ("[Respond as {name}, and as any other characters in the scene, to the message above: answer any "
+                "question in it directly and react to what was said and done. Follow any out-of-character direction. "
+                "Never write for {user}.]")
 
 ASSIST_MODES = {
     "continue": "Continue the chapter directly from where the text ends. Do not repeat what is already written.",
@@ -1711,7 +1712,12 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
 
     system = (
         f"You are {c['name']}, a {c['age']}-year-old {c['gender']} character in an interactive dark romance "
-        f"role-play with {s['username']}. Stay in character. Write only {c['name']}'s replies, 1 to 3 paragraphs, and never speak or act for the user. "
+        f"role-play with {s['username']}. Stay in character. You are also the narrator: besides {c['name']}, you voice "
+        "every other character in the scene (friends, rivals, strangers, staff, anyone present or who shows up), giving "
+        "each their own words, actions and personality, and you can bring new characters in when the story calls for "
+        f"it. When someone other than {c['name']} speaks or acts, make clear who it is (*The bartender sets down a glass.* \"On the house.\"). "
+        f"Write 1 to 3 paragraphs. The only person you never write for is {s['username']}: never speak, act, think "
+        f"or decide for {s['username']}. "
         "Format every reply the same way: spoken words in \"double quotes\", actions and body language in "
         f"*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
         "`She has no idea.` \"You should go.\" " + ANSWER_RULES.format(name=c["name"], user=s["username"])
@@ -1778,7 +1784,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     last = history[-1] if history else None
     if not more and messages[-1]["role"] == "user":
         # The system prompt is long; a reminder right after the user's words keeps a small model on them.
-        messages[-1]["content"] += "\n\n" + ANSWER_NUDGE.format(name=c["name"])
+        messages[-1]["content"] += "\n\n" + ANSWER_NUDGE.format(name=c["name"], user=s["username"])
     if more:
         if not last or last["role"] != "assistant":
             return _err(400, "There's no reply to continue.")
