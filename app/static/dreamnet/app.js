@@ -271,10 +271,10 @@
         '<label>Traits <span class="hint">click to add to the personality</span><div class="choices">' +
         TRAITS.map(function (t) { return '<button type="button" class="chip" data-trait="' + t + '">' + t + "</button>"; }).join("") + "</div></label>" +
         '<label>Personality and backstory<textarea name="persona" rows="5" required placeholder="Who they are, what they want, what they hide, how they talk.">' + esc(c.persona) + "</textarea></label>" +
-        '<label>Appearance<textarea name="appearance" rows="3" placeholder="Hair, eyes, build, scars, clothes.">' + esc(c.appearance) + "</textarea></label>" +
+        '<label>Appearance<textarea name="appearance" rows="3" placeholder="Lifelike detail, even for supernatural characters: skin, hair, eyes, build, scars, clothes.">' + esc(c.appearance) + "</textarea></label>" +
         '<label>Opening line <span class="hint">how they greet you in a new scene; use *asterisks* for actions</span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
         '<div class="two"><label>Tags <span class="hint">comma separated</span><input name="tags" value="' + esc(c.tags) + '"></label>' +
-        '<label>Portrait URL <span class="hint">optional</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
+        '<label>Portrait URL <span class="hint">optional, a photo-realistic image</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
         '<p class="form-error" id="charErr"></p>' +
         '<div class="row"><button class="btn primary">' + (id ? "Save changes" : "Create character") + "</button>" +
         (id ? '<button type="button" class="btn ghost danger" id="delChar">Delete</button>' : "") + "</div>" +

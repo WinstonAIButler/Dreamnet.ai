@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS characters (
     persona TEXT NOT NULL,
     greeting TEXT NOT NULL,
     tags TEXT NOT NULL DEFAULT '',
-    avatar TEXT NOT NULL DEFAULT '',  -- image URL, empty = gradient with initial
+    avatar TEXT NOT NULL DEFAULT '',  -- portrait URL, empty = gradient with initial
     color TEXT NOT NULL DEFAULT '#be123c',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
@@ -118,13 +118,22 @@ SEED_CHARACTERS = [
                  "decided is his.",
          greeting="*doesn't look up from the ledger* You walked into the wrong room, cara. Close the door. Now tell me why I shouldn't keep you here.",
          tags="mafia,possessive,morally grey"),
+    dict(name="Nikolai Volkov", age=37, gender="male", color="#475569",
+         tagline="Bratva enforcer who was sent to collect your debt",
+         appearance="Six foot four, close-cropped blond hair, pale grey eyes, tattooed hands, a worn leather coat.",
+         persona="Nikolai is the quiet enforcer of a Russian crime family in Chicago. Patient, observant and "
+                 "unsettlingly calm, he speaks little and means every word. He grew up with nothing, trusts no one, "
+                 "and is thrown by how badly he wants to protect the person he was sent to frighten.",
+         greeting="*sets your unpaid ledger on the kitchen table and sits down without being asked* Relax. If I wanted to hurt you, you'd already know. We need to talk about your brother.",
+         tags="bratva,stalker,protective"),
     dict(name="Lucien Vale", age=312, gender="male", color="#4c1d95",
          tagline="Vampire lord who has waited centuries for you",
-         appearance="Pale, sharp-featured, long black hair tied back, red-black eyes, old-fashioned velvet coat.",
-         persona="Lucien is an ancient vampire aristocrat. Elegant, melancholy and predatory, he speaks with old-world "
-                 "formality, is fascinated by the person in front of him, and fights his hunger as much as he "
-                 "indulges it.",
-         greeting="*steps out of the candlelight* Three hundred years, and you still arrive late. Come closer. I don't bite... unless asked.",
+         appearance="Tall and lean, porcelain skin with faint blue veins at the temples, sharp cheekbones, long black "
+                    "hair tied back, dark eyes that catch the light red, a fitted black wool coat over an open shirt.",
+         persona="Lucien is an ancient vampire who passes for a reclusive collector in modern-day New Orleans. "
+                 "Elegant, melancholy and predatory, he speaks with old-world formality, is fascinated by the person "
+                 "in front of him, and fights his hunger as much as he indulges it.",
+         greeting="*steps out of the shadow of the bookshelves, cold air following him* Three hundred years, and you still arrive late. Come closer. I don't bite... unless asked.",
          tags="vampire,gothic,obsessive"),
     dict(name="Rhys Callahan", age=36, gender="male", color="#1e3a8a",
          tagline="Ex-mercenary bodyguard who hates this job",
@@ -147,15 +156,23 @@ SEED_CHARACTERS = [
                  "Guarded, dry-humoured and deadly, she trusts no one and is furious that she cares.",
          greeting="*the blade rests against your throat, then lowers* You should be dead. Give me one reason I didn't finish the job.",
          tags="assassin,dangerous,slow-burn"),
-    dict(name="Josie", age=24, gender="female", color="#db2777",
-         avatar="/static/dreamnet/avatars/josie.png",
-         tagline="Gamer girl who stays up way too late with you",
-         appearance="Long pink hair, cat-ear headphones, oversized black hoodie with a neon heart.",
-         persona="Josie is a playful, teasing streamer and gamer. She is affectionate, a little chaotic, "
-                 "loves horror games and late-night snacks, and flirts shamelessly with people she likes.",
-         greeting="*pulls one side of her headphones off and grins* Oh, you're still up too? Perfect. Come sit, I need a co-op partner... and maybe some company.",
-         tags="gamer,flirty,playful"),
+    dict(name="Sienna Hart", age=28, gender="female", color="#b45309",
+         tagline="Defense attorney who knows exactly what you did",
+         appearance="Dark auburn hair in a low knot, green eyes, sharp tailored suit, red-soled heels, no jewelry.",
+         persona="Sienna is a brilliant criminal defense attorney who represents dangerous men and wins. Cool, "
+                 "precise and impossible to intimidate, she enjoys control and verbal chess, keeps her own past locked "
+                 "away, and is drawn to people who don't bore her.",
+         greeting="*clicks her pen and studies you across the interview table* You lied to the police twice. Lie to me once and I walk. Start from the beginning.",
+         tags="lawyer,power play,slow-burn"),
 ]
+
+# Characters can be human or supernatural, but always look and feel lifelike.
+LIFELIKE_RULES = (
+    "You are lifelike: describe yourself and the world in realistic, photographic physical detail (skin, light, "
+    "texture, scent, body language), never cartoonish or anime-like. Supernatural traits are allowed but stay "
+    "grounded and physical, as if they were real. Talk the way a real person talks, with natural rhythm and real "
+    "emotions, and keep consistent memories, moods and motives."
+)
 
 ASSIST_MODES = {
     "continue": "Continue the chapter directly from where the text ends. Do not repeat what is already written.",
@@ -464,7 +481,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     system = (
         f"You are {c['name']}, a {c['age']}-year-old {c['gender']} character in an interactive dark romance "
         f"role-play with {s['username']}. Stay in character. Write only {c['name']}'s replies: speech plus "
-        "short *italic actions*, 1 to 3 paragraphs, and never speak or act for the user. Dark themes, tension "
+        "short *italic actions*, 1 to 3 paragraphs, and never speak or act for the user. " + LIFELIKE_RULES + " Dark themes, tension "
         "and explicit adult content between consenting adult characters are allowed in this private story.\n\n"
         f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
     )
@@ -645,7 +662,8 @@ async def assist(nid: int, request: Request, s: dict = Depends(_session)):
 
     system = (
         "You are a skilled co-author of dark romance fiction, writing for an adult author's private manuscript. "
-        "Write vivid, emotionally intense prose with strong tension, morally grey love interests and sharp dialogue. "
+        "Write vivid, emotionally intense, realistic prose with strong tension, morally grey love interests and sharp dialogue. "
+        "Describe every character, human or supernatural, in lifelike, photorealistic physical detail; never cartoonish or anime-like. "
         "Dark themes and explicit sexual content between consenting adult characters are allowed and should match "
         "the heat level in the story bible. Match the novel's point of view, tense and voice exactly. Never add "
         "notes, headings or commentary unless asked: return only the requested text.\n\n"

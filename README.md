@@ -14,16 +14,18 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   side panel and only lands in your chapter when you append, insert or replace.
   Chapters autosave, can be reordered, and can be summarized so later chapters
   remember what happened.
-- **Character library.** Six starter characters (mafia heir, vampire lord,
-  bodyguard, billionaire rival, assassin, and Josie from JOSIE-Bot). Create your
-  own with traits, backstory, look and an opening line.
+- **Lifelike character library.** Seven starter characters (mafia heir, Bratva
+  enforcer, vampire lord, bodyguard, billionaire rival, assassin, defense
+  attorney). Supernatural characters are welcome, but everyone is written and
+  described as lifelike, never cartoon or anime. Create your own with traits,
+  backstory, look and an opening line.
 - **Roleplay scenes.** Chat in character with streaming replies, regenerate,
   rewind, start a new scene. Start a scene from a novel's cast and the character
   knows the story bible; any reply can be added to the latest chapter.
 - **Export** a novel as one Markdown manuscript.
 - **Installable** as an app on your phone or desktop (Add to Home Screen).
 
-Hard lines that always apply: every character must be 18 or older, nothing may
+Hard lines that always apply: every character is an adult aged 18 or over, nothing may
 depict or imply minors, and messages about self-harm get a crisis-line reply
 instead of roleplay (see `app/safety.py`).
 
@@ -65,7 +67,7 @@ other accounts.
 | Backend, queue, retries, usage tracking, admin panel | `featherless-proxy` (docs in `docs/featherless-proxy.md`) |
 | Studio API: characters, novels, chapters, chats, writing tools | `app/studio.py` (new) |
 | Safety checks and crisis reply | `app/safety.py`, crisis phrases from JOSIE-Bot |
-| Chat history window (20 turns, 12k chars) and Josie | JOSIE-Bot (MIT, see `docs/LICENSE-JOSIE-Bot.md`) |
+| Chat history window (20 turns, 12k chars) and crisis phrases | JOSIE-Bot (MIT, see `docs/LICENSE-JOSIE-Bot.md`) |
 | Installable app shell and service worker | ANEEMA app package |
 | Web app | `app/static/dreamnet/` (no build step) |
 
