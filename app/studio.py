@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS characters (
     tags TEXT NOT NULL DEFAULT '',
     avatar TEXT NOT NULL DEFAULT '',  -- portrait URL, empty = gradient with initial
     portrait_prompt TEXT NOT NULL DEFAULT '',
-    color TEXT NOT NULL DEFAULT '#be123c',
+    color TEXT NOT NULL DEFAULT '#F1916D',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -98,13 +98,25 @@ CREATE TABLE IF NOT EXISTS chapters (
 );
 CREATE INDEX IF NOT EXISTS idx_chapters_novel ON chapters(novel_id, position);
 
+-- A storyline is one continuity: its scenes share a clock, a Day count, exact recall
+-- and the characters' memories. Separate storylines never see each other.
+CREATE TABLE IF NOT EXISTS storylines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    premise TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     character_id INTEGER NOT NULL,
     novel_id INTEGER,                 -- set = the roleplay knows that story bible
+    storyline_id INTEGER,
     title TEXT NOT NULL DEFAULT '',
     summary TEXT NOT NULL DEFAULT '',           -- rolling "story so far" of older turns
     summarized_upto INTEGER NOT NULL DEFAULT 0, -- last message id folded into summary
+    time_rules TEXT NOT NULL DEFAULT '',        -- JSON list of extra or overriding actions for this scene
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -115,6 +127,7 @@ CREATE TABLE IF NOT EXISTS memories (
     character_id INTEGER NOT NULL,
     content TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'auto',        -- auto | user
+    storyline_id INTEGER,                       -- NULL = remembered in every storyline
     conversation_id INTEGER,                    -- auto: the scene it came from
     message_id INTEGER,                         -- auto: the message that proves it
     quote TEXT NOT NULL DEFAULT '',             -- auto: exact words from that message
@@ -136,6 +149,7 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL,               -- user | assistant | mark (story-time mark)
     content TEXT NOT NULL,
     story_at TEXT NOT NULL DEFAULT '', -- in-universe clock at this message (ISO, no zone)
+    time_override REAL,               -- user message: minutes the reply must cover, set with [Time: ...]
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
@@ -149,7 +163,7 @@ SEED_MODELS = [
 ]
 
 SEED_CHARACTERS = [
-    dict(name="Dante Moretti", age=34, gender="male", color="#991b1b",
+    dict(name="Dante Moretti", age=34, gender="male", color="#c8697a",
          tagline="Heir to a crime family who never asks twice",
          appearance="Tall, dark hair pushed back, a scar through one eyebrow, tailored black suits, a signet ring.",
          persona="Dante is the cold, controlled heir of the Moretti family. Possessive, calculating and quietly "
@@ -158,7 +172,7 @@ SEED_CHARACTERS = [
                  "decided is his.",
          greeting="*doesn't look up from the ledger* You walked into the wrong room, cara. Close the door. Now tell me why I shouldn't keep you here.",
          tags="mafia,possessive,morally grey"),
-    dict(name="Nikolai Volkov", age=37, gender="male", color="#475569",
+    dict(name="Nikolai Volkov", age=37, gender="male", color="#19305C",
          tagline="Bratva enforcer who was sent to collect your debt",
          appearance="Six foot four, close-cropped blond hair, pale grey eyes, tattooed hands, a worn leather coat.",
          persona="Nikolai is the quiet enforcer of a Russian crime family in Chicago. Patient, observant and "
@@ -166,7 +180,7 @@ SEED_CHARACTERS = [
                  "and is thrown by how badly he wants to protect the person he was sent to frighten.",
          greeting="*sets your unpaid ledger on the kitchen table and sits down without being asked* Relax. If I wanted to hurt you, you'd already know. We need to talk about your brother.",
          tags="bratva,stalker,protective"),
-    dict(name="Lucien Vale", age=312, gender="male", color="#4c1d95",
+    dict(name="Lucien Vale", age=312, gender="male", color="#413B61",
          tagline="Vampire lord who has waited centuries for you",
          appearance="Tall and lean, porcelain skin with faint blue veins at the temples, sharp cheekbones, long black "
                     "hair tied back, dark eyes that catch the light red, a fitted black wool coat over an open shirt.",
@@ -175,28 +189,28 @@ SEED_CHARACTERS = [
                  "in front of him, and fights his hunger as much as he indulges it.",
          greeting="*steps out of the shadow of the bookshelves, cold air following him* Three hundred years, and you still arrive late. Come closer. I don't bite... unless asked.",
          tags="vampire,gothic,obsessive"),
-    dict(name="Rhys Callahan", age=36, gender="male", color="#1e3a8a",
+    dict(name="Rhys Callahan", age=36, gender="male", color="#2b4a85",
          tagline="Ex-mercenary bodyguard who hates this job",
          appearance="Broad, scarred knuckles, buzzed hair, grey eyes, black tactical jacket, a gun he never hides.",
          persona="Rhys is a gruff former mercenary hired to protect someone he finds infuriating. Blunt, sarcastic and "
                  "fiercely protective, he hides a violent past and a soft spot he would rather die than admit.",
          greeting="*checks the window, then you* Rule one: you go nowhere without me. Rule two: stop looking at me like that.",
          tags="bodyguard,enemies to lovers,protective"),
-    dict(name="Adrian Kross", age=38, gender="male", color="#0f766e",
+    dict(name="Adrian Kross", age=38, gender="male", color="#AE7DAC",
          tagline="Billionaire rival who bought your company to own you",
          appearance="Silver-touched dark hair, clean-shaven, ice-blue eyes, immaculate charcoal suits.",
          persona="Adrian is a ruthless tech billionaire who wins everything he wants. Arrogant, brilliant and "
                  "manipulative, he enjoys verbal duels and slowly reveals an obsession that started years ago.",
          greeting="*signs the last page and slides it across the desk* Congratulations. You work for me now. Sit down, we have a lot to discuss.",
          tags="billionaire,rivals,power play"),
-    dict(name="Mara Voss", age=29, gender="female", color="#be123c",
+    dict(name="Mara Voss", age=29, gender="female", color="#F1916D",
          tagline="Assassin sent to kill you, who didn't",
          appearance="Black hair in a sharp braid, dark eyes, a knife scar on her collarbone, a fitted leather jacket.",
          persona="Mara is a cold, elite assassin who broke contract for the first time when she met her target. "
                  "Guarded, dry-humoured and deadly, she trusts no one and is furious that she cares.",
          greeting="*the blade rests against your throat, then lowers* You should be dead. Give me one reason I didn't finish the job.",
          tags="assassin,dangerous,slow-burn"),
-    dict(name="Sienna Hart", age=28, gender="female", color="#b45309",
+    dict(name="Sienna Hart", age=28, gender="female", color="#d9876a",
          tagline="Defense attorney who knows exactly what you did",
          appearance="Dark auburn hair in a low knot, green eyes, sharp tailored suit, red-soled heels, no jewelry.",
          persona="Sienna is a brilliant criminal defense attorney who represents dangerous men and wins. Cool, "
@@ -264,10 +278,69 @@ def _span(minutes: float) -> str:
                                 f"{m} minute{'s' if m != 1 else ''}" if m else "") if p) or "0 minutes"
 
 
+def _merge_actions(base: list[dict], scene: list[dict]) -> list[dict]:
+    """Scene rules replace a global rule with the same name and add the rest, marked as scene rules."""
+    names = {a["label"].strip().lower(): i for i, a in enumerate(base)}
+    out = [dict(a) for a in base]
+    for a in scene:
+        a = {**a, "scene": True}
+        i = names.get(a["label"].strip().lower())
+        if i is None:
+            out.append(a)
+        else:
+            out[i] = a
+    return out
+
+
+def _clean_actions(raw) -> list[dict]:
+    """Validate an action-time table from the browser. Raises ValueError with a message for the user."""
+    actions = []
+    for a in (raw or [])[:40]:
+        label = str(a.get("label") or "").strip()[:80]
+        if not label:
+            continue
+        try:
+            lo, hi = float(a.get("min") or 0), float(a.get("max") or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"The minutes for “{label}” must be numbers.")
+        if not (0 <= lo <= hi <= MAX_SKIP_MINUTES):
+            raise ValueError(f"Check the minutes for “{label}”: the minimum must be 0 or more and not above the maximum.")
+        actions.append({"label": label, "min": lo, "max": hi, "per": str(a.get("per") or "").strip()[:30],
+                        "context": str(a.get("context") or "").strip()[:200]})
+    return actions
+
+
+_OVERRIDE = re.compile(r"\[\s*time\s*:\s*([^\]]+)\]", re.IGNORECASE)
+_CLOCK_AT = re.compile(r"^(?:at\s+)?(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?$", re.IGNORECASE)
+
+
+def _time_value(value: str, base: datetime) -> datetime | None:
+    """Read a time a user typed, relative to ``base``: a clock time ("03:15 AM", "23:40")
+    means the next time the clock reads that; a duration ("45 min", "+2 hours", "1h 30m") is added."""
+    value = value.strip()
+    m = _CLOCK_AT.match(value)
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").lower()
+        if ap and not 1 <= h <= 12 or h > 23 or mi > 59:
+            return None
+        if ap:
+            h = h % 12 + (12 if ap.startswith("p") else 0)
+        target = base.replace(hour=h, minute=mi, second=0)
+        return target if target >= base else target + timedelta(days=1)
+    units = _UNITS.findall(value)
+    if not units:
+        return None
+    total = 0.0
+    for n, unit in units:
+        u = unit.lower()[0]
+        total += float(n) * (1440 if u == "d" else 60 if u == "h" else 1 / 60 if u == "s" else 1)
+    return base + timedelta(minutes=min(total, MAX_SKIP_MINUTES)) if total >= 0 else None
+
+
 def _time_rules(actions: list[dict]) -> str:
     """The time protocol for the system prompt, built from the action-time table."""
     table = "\n".join(
-        f"   - {a['label']}: " + (_span(a["min"]) if a["min"] == a["max"] else f"{_span(a['min'])} to {_span(a['max'])}")
+        f"   - {a['label']}{' (this scene)' if a.get('scene') else ''}: " + (_span(a["min"]) if a["min"] == a["max"] else f"{_span(a['min'])} to {_span(a['max'])}")
         + (f" per {a['per']}" if a.get("per") else "") + (f". {a['context']}" if a.get("context") else "")
         for a in actions)
     return f"""[TIME MANAGEMENT PROTOCOL - CRITICAL]
@@ -313,12 +386,35 @@ async def init_studio_db(db_path: str):
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(messages)")).fetchall()]
         if "story_at" not in cols:
             await db.execute("ALTER TABLE messages ADD COLUMN story_at TEXT NOT NULL DEFAULT ''")
+        if "time_override" not in cols:
+            await db.execute("ALTER TABLE messages ADD COLUMN time_override REAL")
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(conversations)")).fetchall()]
+        if "time_rules" not in cols:
+            await db.execute("ALTER TABLE conversations ADD COLUMN time_rules TEXT NOT NULL DEFAULT ''")
+        if "storyline_id" not in cols:
+            await db.execute("ALTER TABLE conversations ADD COLUMN storyline_id INTEGER")
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(memories)")).fetchall()]
+        if "storyline_id" not in cols:
+            await db.execute("ALTER TABLE memories ADD COLUMN storyline_id INTEGER")
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(memories)")).fetchall()]
         for col, kind in (("conversation_id", "INTEGER"), ("message_id", "INTEGER"),
                           ("quote", "TEXT NOT NULL DEFAULT ''"), ("said_at", "REAL"),
                           ("story_time", "TEXT NOT NULL DEFAULT ''")):
             if col not in cols:
                 await db.execute(f"ALTER TABLE memories ADD COLUMN {col} {kind}")
+        # Scenes from before storylines: one storyline per character, holding its scenes and memories.
+        orphans = await (await db.execute(
+            """SELECT cv.character_id, c.name, MIN(cv.created_at) FROM conversations cv
+               JOIN characters c ON c.id = cv.character_id WHERE cv.storyline_id IS NULL
+               GROUP BY cv.character_id""")).fetchall()
+        for cid, name, created in orphans:
+            sid = (await db.execute("INSERT INTO storylines (title, created_at, updated_at) VALUES (?,?,?)",
+                                    (f"{name}'s story", created, time.time()))).lastrowid
+            await db.execute("UPDATE conversations SET storyline_id = ? WHERE character_id = ? AND storyline_id IS NULL",
+                             (sid, cid))
+            await db.execute("""UPDATE memories SET storyline_id = COALESCE(
+                                  (SELECT storyline_id FROM conversations WHERE id = memories.conversation_id), ?)
+                                WHERE character_id = ? AND storyline_id IS NULL""", (sid, cid))
         await db.commit()
         n = (await (await db.execute("SELECT COUNT(*) FROM characters")).fetchone())[0]
         if n == 0:
@@ -490,11 +586,19 @@ def _now_line(iso: str, start: str) -> str:
     return f"*[Current Time: {datetime.fromisoformat(iso).strftime('%I:%M %p')} | Day {_day(iso, start)}]*"
 
 
-async def _scene_start(conv_id: int) -> str:
-    """In-universe time the scene began (its first stamped message)."""
-    first = await _row("SELECT story_at FROM messages WHERE conversation_id = ? AND story_at != '' "
-                       "ORDER BY id LIMIT 1", (conv_id,))
+async def _story_start(cv: dict) -> str:
+    """In-universe time the storyline began (its first stamped message); Day 1 is that day."""
+    first = await _row("""SELECT m.story_at FROM messages m JOIN conversations c ON c.id = m.conversation_id
+                          WHERE (c.storyline_id = ? OR c.id = ?) AND m.story_at != '' ORDER BY m.id LIMIT 1""",
+                       (cv["storyline_id"], cv["id"]))
     return first["story_at"] if first else ""
+
+
+async def _storyline_clock(storyline_id: int) -> datetime | None:
+    """Latest in-universe time in a storyline, where its next scene picks up."""
+    last = await _row("""SELECT m.story_at FROM messages m JOIN conversations c ON c.id = m.conversation_id
+                         WHERE c.storyline_id = ? AND m.story_at != '' ORDER BY m.id DESC LIMIT 1""", (storyline_id,))
+    return datetime.fromisoformat(last["story_at"]) if last else None
 
 
 def _iso(d: datetime) -> str:
@@ -565,17 +669,18 @@ def _keywords(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9']{3,}", text.lower()) if w not in _STOP}
 
 
-async def _recall(c: dict, conv_id: int, older_ids_below: int, query: str, username: str) -> list[dict]:
+async def _recall(cv: dict, older_ids_below: int, query: str, username: str) -> list[dict]:
     """Verbatim earlier messages that best match the new message: from this scene
-    (before the context window) and from the character's other scenes."""
+    (before the context window) and from the storyline's other scenes, with any character."""
     words = _keywords(query)
     if not words:
         return []
     rows = await _rows(
-        """SELECT m.id, m.conversation_id, m.role, m.content, m.story_at, m.created_at FROM messages m
-           JOIN conversations cv ON cv.id = m.conversation_id
-           WHERE cv.character_id = ? AND m.role IN ('user', 'assistant')
-             AND (m.conversation_id != ? OR m.id < ?)""", (c["id"], conv_id, older_ids_below))
+        """SELECT m.id, m.conversation_id, m.role, m.content, m.story_at, m.created_at, ch.name FROM messages m
+           JOIN conversations cv ON cv.id = m.conversation_id JOIN characters ch ON ch.id = cv.character_id
+           WHERE (cv.storyline_id = ? OR cv.id = ?) AND m.role IN ('user', 'assistant')
+             AND (m.conversation_id != ? OR m.id < ?)""",
+        (cv["storyline_id"], cv["id"], cv["id"], older_ids_below))
     scored = []
     for m in rows:
         hits = words & _keywords(m["content"])
@@ -588,7 +693,7 @@ async def _recall(c: dict, conv_id: int, older_ids_below: int, query: str, usern
         chars += len(text)
         if chars > RECALL_CHARS and picked:
             break
-        picked.append({**m, "content": text, "who": c["name"] if m["role"] == "assistant" else username})
+        picked.append({**m, "content": text, "who": m["name"] if m["role"] == "assistant" else username})
     return sorted(picked, key=lambda m: m["id"])
 
 
@@ -645,12 +750,12 @@ async def save_character(request: Request, s: dict = Depends(_session)):
         await _exec("""UPDATE characters SET name=?, age=?, gender=?, tagline=?, appearance=?, persona=?,
                        greeting=?, tags=?, color=?, avatar=?, updated_at=? WHERE id=?""",
                     (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
-                     f["persona"], greeting, f["tags"][:200], f["color"] or "#be123c", f["avatar"], now, int(cid)))
+                     f["persona"], greeting, f["tags"][:200], f["color"] or "#F1916D", f["avatar"], now, int(cid)))
         return JSONResponse({"id": int(cid)})
     cid = await _exec("""INSERT INTO characters (name, age, gender, tagline, appearance, persona, greeting,
                          tags, avatar, color, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
-                       f["persona"], greeting, f["tags"][:200], f["avatar"], f["color"] or "#be123c", now, now))
+                       f["persona"], greeting, f["tags"][:200], f["avatar"], f["color"] or "#F1916D", now, now))
     return JSONResponse({"id": cid})
 
 
@@ -778,9 +883,10 @@ async def compact_conversation(conv_id: int, user_id: int, username: str):
     older = [m for m in history[:len(history) - in_window] if m["id"] > cv["summarized_upto"]]
     if len(older) < COMPACT_EVERY:
         return
-    known = [m["content"] for m in await _rows("SELECT content FROM memories WHERE character_id = ? ORDER BY id",
-                                                (c["id"],))]
-    start = await _scene_start(conv_id)
+    known = [m["content"] for m in await _rows(
+        "SELECT content FROM memories WHERE character_id = ? AND (storyline_id = ? OR storyline_id IS NULL) ORDER BY id",
+        (c["id"], cv["storyline_id"]))]
+    start = await _story_start(cv)
     transcript, story_at = _transcript(older, c["name"], username, start)
     while len(transcript) > 16000 and len(older) > COMPACT_EVERY:
         older = older[:len(older) * 3 // 4]  # fold the rest on the next pass instead of truncating it
@@ -828,17 +934,19 @@ async def compact_conversation(conv_id: int, user_id: int, username: str):
         if _norm(fact) in seen or mentions_minor(fact):
             continue
         seen.add(_norm(fact))
-        await _exec("""INSERT INTO memories (character_id, content, source, conversation_id, message_id, quote,
-                       said_at, story_time, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
-                    (c["id"], fact, "auto", conv_id, src["id"], quote, src["created_at"],
+        await _exec("""INSERT INTO memories (character_id, storyline_id, content, source, conversation_id, message_id,
+                       quote, said_at, story_time, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (c["id"], cv["storyline_id"], fact, "auto", conv_id, src["id"], quote, src["created_at"],
                      story_at.get(src["id"], ""), now))
 
 
 @router.get("/characters/{cid}/memories")
-async def list_memories(cid: int, s: dict = Depends(_session)):
-    return JSONResponse(await _rows("SELECT id, content, source, conversation_id, message_id, quote, said_at, "
-                                    "story_time, created_at FROM memories WHERE character_id = ? "
-                                    "ORDER BY COALESCE(said_at, created_at) DESC, id DESC", (cid,)))
+async def list_memories(cid: int, storyline: int | None = None, s: dict = Depends(_session)):
+    """A character's memories in one storyline (plus any that hold in every storyline)."""
+    return JSONResponse(await _rows("SELECT id, content, source, storyline_id, conversation_id, message_id, quote, "
+                                    "said_at, story_time, created_at FROM memories WHERE character_id = ? "
+                                    "AND (? IS NULL OR storyline_id = ? OR storyline_id IS NULL) "
+                                    "ORDER BY COALESCE(said_at, created_at) DESC, id DESC", (cid, storyline, storyline)))
 
 
 @router.post("/characters/{cid}/memories")
@@ -849,8 +957,9 @@ async def add_memory(cid: int, request: Request, s: dict = Depends(_session)):
         return _err(400, "Write the memory first.")
     if mentions_minor(text):
         return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
-    mid = await _exec("INSERT INTO memories (character_id, content, source, created_at) VALUES (?,?,?,?)",
-                      (cid, text, "user", time.time()))
+    sid = int(body["storyline_id"]) if body.get("storyline_id") and not body.get("everywhere") else None
+    mid = await _exec("INSERT INTO memories (character_id, storyline_id, content, source, created_at) VALUES (?,?,?,?,?)",
+                      (cid, sid, text, "user", time.time()))
     return JSONResponse({"id": mid})
 
 
@@ -880,12 +989,61 @@ async def delete_character(cid: int, s: dict = Depends(_session)):
     return JSONResponse({"ok": True})
 
 
+# --- storylines ---
+
+@router.get("/storylines")
+async def storylines(s: dict = Depends(_session)):
+    return JSONResponse(await _rows(
+        """SELECT st.*, (SELECT COUNT(*) FROM conversations cv WHERE cv.storyline_id = st.id) AS scene_count
+           FROM storylines st ORDER BY st.updated_at DESC"""))
+
+
+@router.post("/storylines")
+async def create_storyline(request: Request, s: dict = Depends(_session)):
+    body = await request.json()
+    title, premise = str(body.get("title") or "").strip()[:120], str(body.get("premise") or "").strip()[:2000]
+    if not title:
+        return _err(400, "Give the storyline a title.")
+    if mentions_minor(title + " " + premise):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    now = time.time()
+    return JSONResponse({"id": await _exec("INSERT INTO storylines (title, premise, created_at, updated_at) "
+                                           "VALUES (?,?,?,?)", (title, premise, now, now))})
+
+
+@router.put("/storylines/{sid}")
+async def update_storyline(sid: int, request: Request, s: dict = Depends(_session)):
+    body = await request.json()
+    title, premise = str(body.get("title") or "").strip()[:120], str(body.get("premise") or "").strip()[:2000]
+    if not title:
+        return _err(400, "Give the storyline a title.")
+    if mentions_minor(title + " " + premise):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    await _exec("UPDATE storylines SET title = ?, premise = ?, updated_at = ? WHERE id = ?",
+                (title, premise, time.time(), sid))
+    return JSONResponse({"ok": True})
+
+
+@router.delete("/storylines/{sid}")
+async def delete_storyline(sid: int, s: dict = Depends(_session)):
+    """Delete a storyline with its scenes and the memories learned in it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM messages WHERE conversation_id IN "
+                         "(SELECT id FROM conversations WHERE storyline_id = ?)", (sid,))
+        await db.execute("DELETE FROM conversations WHERE storyline_id = ?", (sid,))
+        await db.execute("DELETE FROM memories WHERE storyline_id = ?", (sid,))
+        await db.execute("DELETE FROM storylines WHERE id = ?", (sid,))
+        await db.commit()
+    return JSONResponse({"ok": True})
+
+
 # --- roleplay chats ---
 
 @router.get("/conversations")
 async def conversations(s: dict = Depends(_session)):
     return JSONResponse(await _rows(
-        """SELECT cv.id, cv.character_id, cv.novel_id, cv.updated_at, c.name, c.avatar, c.color, n.title AS novel_title,
+        """SELECT cv.id, cv.character_id, cv.novel_id, cv.storyline_id, cv.updated_at, c.name, c.avatar, c.color,
+             n.title AS novel_title,
              (SELECT content FROM messages m WHERE m.conversation_id = cv.id ORDER BY m.id DESC LIMIT 1) AS last
            FROM conversations cv JOIN characters c ON c.id = cv.character_id
            LEFT JOIN novels n ON n.id = cv.novel_id
@@ -899,18 +1057,33 @@ async def start_conversation(request: Request, s: dict = Depends(_session)):
     if not c:
         return _err(404, "Character not found")
     novel_id = body.get("novel_id") or None
+    storyline_id = int(body.get("storyline_id") or 0) or None
+    if storyline_id and not await _row("SELECT id FROM storylines WHERE id = ?", (storyline_id,)):
+        return _err(404, "Storyline not found")
     if not body.get("new"):
         existing = await _row("SELECT id FROM conversations WHERE character_id = ? AND novel_id IS ? "
-                              "ORDER BY updated_at DESC LIMIT 1", (c["id"], novel_id))
+                              "AND (? IS NULL OR storyline_id = ?) ORDER BY updated_at DESC LIMIT 1",
+                              (c["id"], novel_id, storyline_id, storyline_id))
         if existing:
             return JSONResponse({"id": existing["id"]})
     now = time.time()
+    if not storyline_id:
+        if body.get("storyline_from"):  # "New scene" keeps the scene it came from in the same storyline
+            src = await _row("SELECT storyline_id FROM conversations WHERE id = ?", (int(body["storyline_from"]),))
+            storyline_id = src["storyline_id"] if src else None
+        if not storyline_id:
+            storyline_id = await _exec("INSERT INTO storylines (title, created_at, updated_at) VALUES (?,?,?)",
+                                       (f"{c['name']}'s story", now, now))
     try:
-        start = datetime.fromisoformat(str(body["story_start"])) if body.get("story_start") else datetime.now()
+        if body.get("story_start"):
+            start = datetime.fromisoformat(str(body["story_start"]))
+        else:  # pick up where the storyline left off
+            start = await _storyline_clock(storyline_id) or datetime.now()
     except ValueError:
         return _err(400, "That story start time isn't a valid date and time.")
-    cv = await _exec("INSERT INTO conversations (character_id, novel_id, created_at, updated_at) VALUES (?,?,?,?)",
-                     (c["id"], novel_id, now, now))
+    cv = await _exec("INSERT INTO conversations (character_id, novel_id, storyline_id, created_at, updated_at) "
+                     "VALUES (?,?,?,?,?)", (c["id"], novel_id, storyline_id, now, now))
+    await _exec("UPDATE storylines SET updated_at = ? WHERE id = ?", (now, storyline_id))
     await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
                 (cv, "assistant", c["greeting"], _iso(start), now))
     return JSONResponse({"id": cv})
@@ -928,7 +1101,9 @@ async def get_conversation(conv_id: int, s: dict = Depends(_session)):
     upto = next((m["created_at"] for m in msgs if m["id"] == cv["summarized_upto"]), None)
     return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs, "summary": cv["summary"],
                          "summary_upto": upto, "clock": _iso(await _scene_clock(cv)),
-                         "start": await _scene_start(conv_id)})
+                         "start": await _story_start(cv),
+                         "storyline": await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],)),
+                         "time_rules": json.loads(cv["time_rules"]) if cv["time_rules"] else []})
 
 
 
@@ -967,18 +1142,9 @@ async def save_time_rules(request: Request, s: dict = Depends(_session)):
     body = await request.json()
     try:
         pace = float(body.get("pace") or 1.0)
-        actions = []
-        for a in (body.get("actions") or [])[:40]:
-            label = str(a.get("label") or "").strip()[:80]
-            lo, hi = float(a.get("min") or 0), float(a.get("max") or 0)
-            if not label:
-                continue
-            if not (0 <= lo <= hi <= MAX_SKIP_MINUTES):
-                return _err(400, f"Check the minutes for “{label}”: the minimum must be 0 or more and not above the maximum.")
-            actions.append({"label": label, "min": lo, "max": hi, "per": str(a.get("per") or "").strip()[:30],
-                            "context": str(a.get("context") or "").strip()[:200]})
-    except (TypeError, ValueError):
-        return _err(400, "Minutes must be numbers.")
+        actions = _clean_actions(body.get("actions"))
+    except ValueError as e:
+        return _err(400, str(e) if "“" in str(e) else "Minutes must be numbers.")
     if pace not in PACES:
         return _err(400, "Pick a pace of 0.5x, 1.0x or 1.5x.")
     if not actions:
@@ -987,6 +1153,43 @@ async def save_time_rules(request: Request, s: dict = Depends(_session)):
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (json.dumps({"pace": pace, "actions": actions}),))
     return JSONResponse({"ok": True})
+
+
+@router.put("/conversations/{conv_id}/time-rules")
+async def save_scene_time_rules(conv_id: int, request: Request, s: dict = Depends(_session)):
+    """Time rules for one scene: they add to the global table, and replace a global rule with the same name."""
+    body = await request.json()
+    try:
+        actions = _clean_actions(body.get("actions"))
+    except ValueError as e:
+        return _err(400, str(e))
+    await _exec("UPDATE conversations SET time_rules = ? WHERE id = ?", (json.dumps(actions) if actions else "", conv_id))
+    return JSONResponse({"ok": True, "actions": actions})
+
+
+@router.put("/messages/{msg_id}/time")
+async def override_message_time(msg_id: int, request: Request, s: dict = Depends(_session)):
+    """Change when a reply ends ("03:15 AM") or how long it took ("45 min"). Every later
+    message in the scene moves by the same amount, so the timeline stays consistent."""
+    body = await request.json()
+    m = await _row("SELECT * FROM messages WHERE id = ?", (msg_id,))
+    if not m or not m["story_at"]:
+        return _err(404, "Message not found")
+    prev = await _row("SELECT story_at FROM messages WHERE conversation_id = ? AND id < ? AND story_at != '' "
+                      "ORDER BY id DESC LIMIT 1", (m["conversation_id"], msg_id))
+    base = datetime.fromisoformat(prev["story_at"] if prev else m["story_at"])
+    new = _time_value(str(body.get("value") or ""), base)
+    if new is None:
+        return _err(400, "Write a time like 03:15 AM or a length like 45 min or 2 hours.")
+    delta = new - datetime.fromisoformat(m["story_at"])
+    later = await _rows("SELECT id, story_at FROM messages WHERE conversation_id = ? AND id >= ? AND story_at != ''",
+                        (m["conversation_id"], msg_id))
+    async with aiosqlite.connect(DB_PATH) as db:
+        for r in later:
+            await db.execute("UPDATE messages SET story_at = ? WHERE id = ?",
+                             (_iso(datetime.fromisoformat(r["story_at"]) + delta), r["id"]))
+        await db.commit()
+    return JSONResponse({"ok": True, "story_at": _iso(new), "shifted": len(later)})
 
 
 @router.post("/conversations/{conv_id}/marks")
@@ -1042,11 +1245,21 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     now = time.time()
     clock = await _scene_clock(cv)
 
+    override = None  # minutes the reply must cover, from a [Time: ...] tag in the message
     if text:  # an empty message means "regenerate the reply to the last message"
+        tag = _OVERRIDE.search(text)
+        if tag:
+            until = _time_value(tag.group(1), clock)
+            if until is None:
+                return _err(400, "Write the time like [Time: 45 min], [Time: 2 hours] or [Time: 03:15 AM].")
+            override = (until - clock).total_seconds() / 60
+            text = re.sub(r"[ \t]{2,}", " ", _OVERRIDE.sub("", text)).strip()
+            if not text:
+                return _err(400, "Write what happens too, with the [Time: ...] tag.")
         if mentions_minor(text):
             return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
-        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
-                    (conv_id, "user", text, _iso(clock), now))
+        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, time_override, created_at) "
+                    "VALUES (?,?,?,?,?,?)", (conv_id, "user", text, _iso(clock), override, now))
         if is_crisis(text):
             await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) "
                         "VALUES (?,?,?,?,?)", (conv_id, "assistant", CRISIS_RESPONSE, _iso(clock), now))
@@ -1064,10 +1277,15 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         novel, cast = await _novel_with_cast(cv["novel_id"])
         if novel:
             system += "\nThis role-play is a scene for the user's novel. Story bible:\n" + _bible(novel, cast) + "\n"
+    story = await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],))
+    if story:
+        system += f"\nStoryline: {story['title']}" + (f". {story['premise']}" if story["premise"] else "") + "\n"
     # User-written memories always go in; the newest automatic ones fill the rest.
     mems = await _rows("""SELECT * FROM (SELECT content, said_at, story_time, created_at, source, id FROM memories
-                          WHERE character_id = ? ORDER BY source = 'user' DESC, id DESC LIMIT ?)
-                          ORDER BY COALESCE(said_at, created_at), id""", (c["id"], MAX_MEMORIES_IN_PROMPT))
+                          WHERE character_id = ? AND (storyline_id = ? OR storyline_id IS NULL)
+                          ORDER BY source = 'user' DESC, id DESC LIMIT ?)
+                          ORDER BY COALESCE(said_at, created_at), id""",
+                       (c["id"], cv["storyline_id"], MAX_MEMORIES_IN_PROMPT))
     if mems:
         system += (f"\nThings {c['name']} remembers about {s['username']}, oldest first. These are facts:\n"
                    + "\n".join(f"- [{_stamp(m['said_at'] or m['created_at'])}"
@@ -1076,11 +1294,11 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     if cv["summary"]:
         system += f"\nThis scene so far (earlier messages, summarized in order):\n{cv['summary']}\n"
 
-    history = await _rows("SELECT id, role, content, story_at, created_at FROM messages WHERE conversation_id = ? "
-                          "ORDER BY id", (conv_id,))
+    history = await _rows("SELECT id, role, content, story_at, time_override, created_at FROM messages "
+                          "WHERE conversation_id = ? ORDER BY id", (conv_id,))
     window = _history_window(history)
     first_in_window = history[len(history) - len(window)]["id"] if window else 0
-    recalled = await _recall(c, conv_id, first_in_window, text or (history[-1]["content"] if history else ""),
+    recalled = await _recall(cv, first_in_window, text or (history[-1]["content"] if history else ""),
                              s["username"])
     if recalled:
         system += ("\nExact lines from earlier, word for word, with when they were said:\n"
@@ -1088,12 +1306,20 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
                                 + (f" | story time {_clock_text(m['story_at'])}" if m["story_at"] else "")
                                 + f"] {m['who']}: {m['content']}" for m in recalled) + "\n")
     marks = [m for m in history if m["role"] == "mark"]
-    start = next((m["story_at"] for m in history if m["story_at"]), _iso(clock))
+    start = await _story_start(cv) or _iso(clock)
     tset = await _time_settings()
+    actions = _merge_actions(tset["actions"], json.loads(cv["time_rules"]) if cv["time_rules"] else [])
+    if not text and history and history[-1]["role"] == "user":  # regenerate keeps the override
+        override = history[-1]["time_override"]
     system += (f"\nCurrent in-universe time: {_clock_text(_iso(clock), start)}, {_daypart(clock)}, "
                f"moon: {_moon(clock).lower()}"
                + (f" (latest story mark: {marks[-1]['content']})" if marks else "") + "\n\n"
-               + _time_rules(tset["actions"]) + "\n")
+               + _time_rules(actions) + "\n")
+    if override is not None:
+        end = clock + timedelta(minutes=override)
+        system += (f"\nThe user has set this exchange to take exactly {_span(override)}, ending at "
+                   f"{end.strftime('%I:%M %p')} (Day {_day(_iso(end), start)}). Write the reply to cover that "
+                   f"span, with a transition if hours pass, and end with [Time passed: {_span(override)}].\n")
     system += (f"\nContinuity: keep every detail consistent with the memories, summary and exact lines above "
                "(names, dates, places, promises, who did what). Never invent past events that aren't there; if "
                f"{c['name']} isn't sure, they stay vague instead of making it up.\n\n" + SAFETY_RULES)
@@ -1102,6 +1328,8 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
 
     async def save(reply):
         reply, minutes = _elapsed(reply, float(tset["pace"]))
+        if override is not None:
+            minutes = override
         await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
                     (conv_id, "assistant", reply, _iso(clock + timedelta(minutes=minutes)), time.time()))
         asyncio.create_task(compact_conversation(conv_id, s["user_id"], s["username"]))

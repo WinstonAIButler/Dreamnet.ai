@@ -84,7 +84,7 @@
   function avatar(c, cls) {
     var style = c.avatar
       ? "background-image:url('" + esc(c.avatar) + "')"
-      : "background:linear-gradient(135deg," + esc(c.color || "#be123c") + ",#1a0f1f)";
+      : "background:linear-gradient(135deg," + esc(c.color || "#F1916D") + ",#03122F)";
     return '<div class="avatar ' + (cls || "") + '" style="' + style + '">' +
       (c.avatar ? "" : esc((c.name || "?").charAt(0))) + "</div>";
   }
@@ -299,7 +299,7 @@
   function viewCharacterForm(id) {
     setNav("characters");
     var load = id ? api("/app/api/characters/" + id) : Promise.resolve({
-      name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#be123c", avatar: "",
+      name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#F1916D", avatar: "",
     });
     load.then(function (c) {
       view.innerHTML =
@@ -396,23 +396,82 @@
     view.className = "page-chat";
     var ctrl = null;
     cleanup = function () { if (ctrl) ctrl.abort(); };
-    Promise.all([api("/app/api/conversations"), convId ? api("/app/api/conversations/" + convId) : null]).then(function (r) {
-      var convs = r[0], conv = r[1];
+    Promise.all([api("/app/api/conversations"), convId ? api("/app/api/conversations/" + convId) : null,
+      api("/app/api/storylines"), api("/app/api/characters")]).then(function (r) {
+      var convs = r[0], conv = r[1], stories = r[2], chars = r[3];
       if (!conv && convs.length) { location.replace("#/chat/" + convs[0].id); return; }
-      var side = '<aside class="sidebar"><h4>Scenes</h4>' + (convs.map(function (cv) { return convLink(cv, cv.id === convId); }).join("") ||
-        '<p class="muted pad">No scenes yet.</p>') + '<a class="btn small wide" href="#/characters">+ New scene</a></aside>';
+      var charOptions = chars.map(function (ch) { return '<option value="' + ch.id + '">' + esc(ch.name) + "</option>"; }).join("");
+      // Sidebar: storylines, newest first, each with its scenes.
+      var side = '<aside class="sidebar"><h4>Storylines<button type="button" class="side-toggle side-close" title="Close">×</button></h4>' + stories.map(function (st) {
+        var mine = convs.filter(function (cv) { return cv.storyline_id === st.id; });
+        var open = conv && conv.storyline && conv.storyline.id === st.id;
+        return '<div class="story' + (open ? " open" : "") + '" data-story="' + st.id + '">' +
+          '<div class="story-head"><b title="' + esc(st.premise) + '">' + esc(st.title) + "</b>" +
+          '<button type="button" data-editstory="' + st.id + '" title="Edit storyline">✎</button>' +
+          '<button type="button" data-addscene="' + st.id + '" title="New scene in this storyline">＋</button></div>' +
+          '<form class="story-form" data-sceneform="' + st.id + '" hidden><select name="character">' + charOptions + "</select>" +
+          '<button class="btn small primary">Start scene</button></form>' +
+          '<form class="story-form" data-editform="' + st.id + '" hidden><input name="title" maxlength="120" value="' + esc(st.title) + '">' +
+          '<textarea name="premise" rows="3" placeholder="Premise">' + esc(st.premise) + "</textarea>" +
+          '<div class="row"><button class="btn small primary">Save</button><button type="button" class="btn small ghost danger" data-delstory="' + st.id + '">Delete storyline</button></div></form>' +
+          mine.map(function (cv) { return convLink(cv, cv.id === convId); }).join("") + "</div>";
+      }).join("") +
+        (stories.length ? "" : '<p class="muted pad">No storylines yet.</p>') +
+        '<button type="button" class="btn small wide" id="newStoryBtn">+ New storyline</button>' +
+        '<form class="story-form" id="newStory" hidden><input name="title" maxlength="120" placeholder="Title, e.g. The Volkov debt" required>' +
+        '<textarea name="premise" rows="3" placeholder="Premise (optional): who you are, where it starts, what\'s at stake"></textarea>' +
+        '<label>First character<select name="character">' + charOptions + "</select></label>" +
+        '<label>Story starts<input type="datetime-local" name="start"></label>' +
+        '<button class="btn small primary">Start storyline</button></form></aside>';
+      function wireSidebar() {
+        var sb = view.querySelector(".sidebar");
+        sb.onclick = function (e) {
+          var b = e.target.closest("button");
+          if (!b) return;
+          if (b.classList.contains("side-close")) { view.querySelector(".chat-layout").classList.remove("show-side"); }
+          else if (b.id === "newStoryBtn") { document.getElementById("newStory").hidden = !document.getElementById("newStory").hidden; }
+          else if (b.dataset.addscene) { var f = sb.querySelector('[data-sceneform="' + b.dataset.addscene + '"]'); f.hidden = !f.hidden; }
+          else if (b.dataset.editstory) { var g = sb.querySelector('[data-editform="' + b.dataset.editstory + '"]'); g.hidden = !g.hidden; }
+          else if (b.dataset.delstory) {
+            if (!confirm("Delete this storyline, all its scenes and everything learned in it? This can't be undone.")) return;
+            api("/app/api/storylines/" + b.dataset.delstory, { method: "DELETE" }).then(function () { location.hash = "#/chats"; route(); });
+          }
+        };
+        sb.onsubmit = function (e) {
+          e.preventDefault();
+          var f = e.target;
+          if (f.id === "newStory") {
+            api("/app/api/storylines", { method: "POST", body: { title: f.title.value, premise: f.premise.value } })
+              .then(function (st) {
+                return api("/app/api/conversations", { method: "POST", body: { character_id: +f.character.value, storyline_id: st.id, new: true, story_start: f.start.value || null } });
+              })
+              .then(function (r) { location.hash = "#/chat/" + r.id; })
+              .catch(function (err) { toast(err.message, true); });
+          } else if (f.dataset.sceneform) {
+            api("/app/api/conversations", { method: "POST", body: { character_id: +f.character.value, storyline_id: +f.dataset.sceneform, new: true } })
+              .then(function (r) { location.hash = "#/chat/" + r.id; })
+              .catch(function (err) { toast(err.message, true); });
+          } else if (f.dataset.editform) {
+            api("/app/api/storylines/" + f.dataset.editform, { method: "PUT", body: { title: f.title.value, premise: f.premise.value } })
+              .then(function () { toast("Storyline saved"); route(); })
+              .catch(function (err) { toast(err.message, true); });
+          }
+        };
+      }
       if (!conv) {
-        view.innerHTML = '<div class="chat-layout">' + side + '<section class="chat"><div class="empty">Pick a character to start a scene.<br><br><a class="btn primary" href="#/characters">Choose a character</a></div></section></div>';
+        view.innerHTML = '<div class="chat-layout">' + side + '<section class="chat"><div class="empty"><button type="button" class="btn small ghost side-toggle" onclick="this.closest(\'.chat-layout\').classList.toggle(\'show-side\')">☰ Storylines</button><br>Start a storyline, or pick a character to begin.<br><br><a class="btn primary" href="#/characters">Choose a character</a></div></section></div>';
+        wireSidebar();
         return;
       }
       var c = conv.character;
       view.innerHTML = '<div class="chat-layout">' + side +
         '<section class="chat">' +
-        '<div class="chat-head">' + avatar(c) + '<div class="grow"><b>' + esc(c.name) + "</b><p>" +
-        (conv.novel ? "Scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : esc(c.tagline)) + "</p></div>" +
+        '<div class="chat-head"><button type="button" class="btn small ghost side-toggle" id="sideBtn" title="Storylines and scenes">☰</button>' + avatar(c) + '<div class="grow"><b>' + esc(c.name) + "</b><p>" +
+        (conv.storyline ? esc(conv.storyline.title) : esc(c.tagline)) +
+        (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div>" +
         '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">🕒 <span id="clockNow"></span></button>' +
         '<button class="btn small" id="memBtn" title="What ' + esc(c.name) + ' remembers">Memory</button>' +
-        '<button class="btn small" id="newScene" title="Start over with the opening line">New scene</button>' +
+        '<button class="btn small" id="newScene" title="A new scene in this storyline, starting at its current time">New scene</button>' +
         '<button class="btn small ghost" id="delConv" title="Delete this scene">🗑</button></div>' +
         '<div class="memory-panel" id="memPanel" hidden></div>' +
         '<form class="clock-panel" id="clockPanel" hidden>' +
@@ -420,12 +479,17 @@
         '<label>or skip ahead<span class="row"><input type="number" id="skipH" min="0" max="672" placeholder="0"> h ' +
         '<input type="number" id="skipM" min="0" max="59" placeholder="0"> min</span></label>' +
         '<label class="grow">Label (optional)<input id="clockLabel" maxlength="120" placeholder="The next morning, his penthouse"></label>' +
-        '<button class="btn small primary">Mark time</button><a class="btn small ghost" href="#/time-rules">Time rules</a></form>' +
+        '<button class="btn small primary">Mark time</button><a class="btn small ghost" href="#/time-rules">Time rules</a>' +
+        '<div class="scene-rules"><h4>Time rules for this scene <span class="hint">add to the main table; same name replaces it</span></h4>' +
+        '<div id="sceneRules"></div><button type="button" class="btn small" id="srAdd">+ Add rule</button> ' +
+        '<button type="button" class="btn small" id="srSave">Save scene rules</button></div></form>' +
         '<div class="messages" id="msgs"></div>' +
-        '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Write your reply. Use *asterisks* for actions."></textarea>' +
+        '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Write your reply. *Asterisks* for actions. Add [Time: 45 min] or [Time: 03:15 AM] to set how long it takes."></textarea>' +
         '<button class="btn primary" id="sendBtn">Send</button></form>' +
         '<p class="notice">' + esc(c.name) + " is an AI character. Every character is a fictional adult.</p>" +
         "</section></div>";
+      wireSidebar();
+      document.getElementById("sideBtn").onclick = function () { view.querySelector(".chat-layout").classList.toggle("show-side"); };
 
       var msgs = document.getElementById("msgs");
       var input = document.getElementById("input");
@@ -453,7 +517,7 @@
           }
           return head + '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
             '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
-            (m.role === "assistant" && m.story_at ? '<div class="now">' + esc(nowLine(m.story_at, start)) + "</div>" : "") + "</div>" +
+            (m.role === "assistant" && m.story_at ? '<button type="button" class="now" data-settime="' + m.id + '" title="Change this time">' + esc(nowLine(m.story_at, start)) + "</button>" : "") + "</div>" +
             (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
               '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time>" +
               (m.role === "assistant" && isLast && i > 0 ? '<button data-regen="' + m.id + '">↻ Regenerate</button>' : "") +
@@ -506,6 +570,13 @@
           api("/app/api/messages/" + b.dataset.rewind, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id < +b.dataset.rewind; }); render();
           });
+        } else if (b.dataset.settime) {
+          var v = prompt("When does this reply end? Type a time (03:15 AM) or how long it took (45 min, 2 hours). Later messages move with it.");
+          if (!v || !v.trim()) return;
+          api("/app/api/messages/" + b.dataset.settime + "/time", { method: "PUT", body: { value: v.trim() } })
+            .then(function () { return api("/app/api/conversations/" + convId); })
+            .then(function (fresh) { list = fresh.messages; render(); toast("Time updated"); })
+            .catch(function (err) { toast(err.message, true); });
         } else if (b.dataset.delmark) {
           api("/app/api/marks/" + b.dataset.delmark, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id !== +b.dataset.delmark; }); render();
@@ -515,6 +586,32 @@
         }
       };
       var clockPanel = document.getElementById("clockPanel");
+      var sceneRules = (conv.time_rules || []).slice();
+      function drawSceneRules() {
+        document.getElementById("sceneRules").innerHTML = sceneRules.map(function (a, i) {
+          return '<div class="sr-row" data-i="' + i + '"><input data-k="label" placeholder="Action, e.g. Shapeshifting" value="' + esc(a.label) + '">' +
+            '<input data-k="min" type="number" min="0" step="any" value="' + a.min + '" aria-label="Minimum minutes"> to ' +
+            '<input data-k="max" type="number" min="0" step="any" value="' + a.max + '" aria-label="Maximum minutes"> min ' +
+            '<input data-k="per" placeholder="per…" value="' + esc(a.per || "") + '" class="sr-per">' +
+            '<button type="button" data-delrule="' + i + '" title="Remove">×</button></div>';
+        }).join("") || '<p class="muted">None yet.</p>';
+      }
+      drawSceneRules();
+      document.getElementById("sceneRules").oninput = function (e) {
+        var row = e.target.closest(".sr-row"), k = e.target.dataset.k;
+        if (!row || !k) return;
+        sceneRules[+row.dataset.i][k] = k === "min" || k === "max" ? parseFloat(e.target.value) || 0 : e.target.value;
+      };
+      document.getElementById("sceneRules").onclick = function (e) {
+        var b = e.target.closest("[data-delrule]");
+        if (b) { sceneRules.splice(+b.dataset.delrule, 1); drawSceneRules(); }
+      };
+      document.getElementById("srAdd").onclick = function () { sceneRules.push({ label: "", min: 1, max: 5, per: "" }); drawSceneRules(); };
+      document.getElementById("srSave").onclick = function () {
+        api("/app/api/conversations/" + convId + "/time-rules", { method: "PUT", body: { actions: sceneRules } })
+          .then(function (r) { sceneRules = r.actions; drawSceneRules(); toast("Scene rules saved"); })
+          .catch(function (err) { toast(err.message, true); });
+      };
       document.getElementById("clockBtn").onclick = function () {
         clockPanel.hidden = !clockPanel.hidden;
         if (!clockPanel.hidden) document.getElementById("clockSet").value = currentClock().slice(0, 16);
@@ -532,19 +629,20 @@
       };
       var memPanel = document.getElementById("memPanel");
       function loadMemory() {
-        Promise.all([api("/app/api/characters/" + c.id + "/memories"), api("/app/api/conversations/" + convId)]).then(function (r) {
+        Promise.all([api("/app/api/characters/" + c.id + "/memories?storyline=" + (conv.storyline ? conv.storyline.id : "")), api("/app/api/conversations/" + convId)]).then(function (r) {
           var mems = r[0], fresh = r[1];
           memPanel.innerHTML =
             '<div class="mem-col"><h4>This scene so far' + (fresh.summary_upto ? ' <span class="hint">up to ' + esc(stamp(fresh.summary_upto)) + "</span>" : "") + "</h4>" +
             '<textarea id="sumText" rows="5" placeholder="Filled in automatically once the scene gets long. You can edit it.">' + esc(fresh.summary) + "</textarea>" +
             '<button class="btn small" id="sumSave">Save summary</button></div>' +
-            '<div class="mem-col"><h4>' + esc(c.name) + " remembers <span class=\"hint\">across every scene</span></h4>" +
+            '<div class="mem-col"><h4>' + esc(c.name) + " remembers <span class=\"hint\">in every scene of this storyline</span></h4>" +
             '<form class="row" id="memAdd"><input id="memText" placeholder="Add something they should never forget"><button class="btn small">Add</button></form>' +
+            '<label class="check-line"><input type="checkbox" id="memAll"> Remember in every storyline</label>' +
             '<ul class="mem-list">' + (mems.map(function (m) {
               var when = stamp(m.said_at || m.created_at) + (m.story_time ? " · story time: " + m.story_time : "");
               return '<li><div class="grow"><span>' + esc(m.content) + "</span>" +
                 (m.quote ? '<q>' + esc(m.quote) + "</q>" : "") +
-                '<small>' + esc(when) + " · " + (m.source === "user" ? "added by you" : "from a scene") + "</small></div>" +
+                '<small>' + esc(when) + " · " + (m.source === "user" ? "added by you" : "from a scene") + (m.storyline_id ? "" : " · every storyline") + "</small></div>" +
                 '<button data-delmem="' + m.id + '" title="Forget">×</button></li>';
             }).join("") || '<li class="muted">Nothing yet. Memories are added automatically as you play.</li>') + "</ul></div>";
           document.getElementById("sumSave").onclick = function () {
@@ -555,7 +653,7 @@
             e.preventDefault();
             var t = document.getElementById("memText").value.trim();
             if (!t) return;
-            api("/app/api/characters/" + c.id + "/memories", { method: "POST", body: { content: t } }).then(loadMemory)
+            api("/app/api/characters/" + c.id + "/memories", { method: "POST", body: { content: t, storyline_id: conv.storyline ? conv.storyline.id : null, everywhere: document.getElementById("memAll").checked } }).then(loadMemory)
               .catch(function (err) { toast(err.message, true); });
           };
           memPanel.querySelectorAll("[data-delmem]").forEach(function (b) {
@@ -568,7 +666,7 @@
         if (!memPanel.hidden) loadMemory();
       };
       document.getElementById("newScene").onclick = function () {
-        api("/app/api/conversations", { method: "POST", body: { character_id: c.id, novel_id: conv.novel ? conv.novel.id : null, new: true } })
+        api("/app/api/conversations", { method: "POST", body: { character_id: c.id, novel_id: conv.novel ? conv.novel.id : null, new: true, storyline_from: convId } })
           .then(function (r) { location.hash = "#/chat/" + r.id; });
       };
       document.getElementById("delConv").onclick = function () {

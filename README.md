@@ -19,6 +19,11 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   attorney). Supernatural characters are welcome, but everyone is written and
   described as lifelike, never cartoon or anime. Create your own with traits,
   backstory, look and an opening line.
+- **Storylines.** Run as many separate roleplay storylines as you like. Each
+  has its own title, premise, scenes (with any characters), clock and Day
+  count, and the characters' memories stay inside it, so nothing leaks from one
+  story into another. Mark a memory "every storyline" to share it. A new scene
+  in a storyline picks up at that storyline's current time.
 - **Roleplay scenes.** Chat in character with streaming replies, regenerate,
   rewind, start a new scene. Start a scene from a novel's cast and the character
   knows the story bible; any reply can be added to the latest chapter.
@@ -40,7 +45,10 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   driving, blood feeding, rituals, combat, potions, spellcasting, intimacy,
   meals, sleep) and the app does the clock math, so time stays consistent
   through regenerates and rewinds. Edit the table and the pace (0.5x slow,
-  1.0x real, 1.5x fast) on the **Time rules** page. Use the clock button in a
+  1.0x real, 1.5x fast) on the **Time rules** page, and add rules for just one
+  scene from its clock panel. During play, put [Time: 45 min] or
+  [Time: 03:15 AM] in your message to set exactly how long the reply covers, or
+  click any [Current Time] line to correct it; later messages move with it. Use the clock button in a
   scene to set the time, skip ahead or label a moment ("The next morning, his
   penthouse").
 - **Lifelike portraits.** One click turns a character card into a photorealistic
