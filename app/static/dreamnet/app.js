@@ -275,6 +275,7 @@
         '<label>Opening line <span class="hint">how they greet you in a new scene; use *asterisks* for actions</span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
         '<div class="two"><label>Tags <span class="hint">comma separated</span><input name="tags" value="' + esc(c.tags) + '"></label>' +
         '<label>Portrait URL <span class="hint">optional, a photo-realistic image</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
+        portraitSection(id, c) +
         '<p class="form-error" id="charErr"></p>' +
         '<div class="row"><button class="btn primary">' + (id ? "Save changes" : "Create character") + "</button>" +
         (id ? '<button type="button" class="btn ghost danger" id="delChar">Delete</button>' : "") + "</div>" +
@@ -301,12 +302,46 @@
           .then(function () { toast("Saved"); location.hash = "#/characters"; })
           .catch(function (err) { document.getElementById("charErr").textContent = err.message; });
       };
+      var genP = document.getElementById("genPortrait");
+      if (genP) genP.onclick = function () {
+        var status = document.getElementById("portraitStatus");
+        var promptEl = document.getElementById("portraitPrompt");
+        genP.disabled = true;
+        status.textContent = promptEl.value.trim() ? "Generating the portrait…" : "Writing a photo prompt, then generating…";
+        // Save the card first so the prompt is written from what's on screen.
+        var body = { id: id };
+        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar"].forEach(function (k) { body[k] = form[k].value; });
+        api("/app/api/characters", { method: "POST", body: body })
+          .then(function () { return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })
+          .then(function (r) {
+            form.avatar.value = r.avatar;
+            promptEl.value = r.prompt;
+            preview();
+            status.textContent = "Done. Generate again for a different take, or edit the prompt first.";
+          })
+          .catch(function (err) { status.textContent = err.message; })
+          .finally(function () { genP.disabled = false; });
+      };
       var del = document.getElementById("delChar");
       if (del) del.onclick = function () {
         if (!confirm("Delete " + c.name + " and all their roleplay chats?")) return;
         api("/app/api/characters/" + id, { method: "DELETE" }).then(function () { location.hash = "#/characters"; });
       };
     });
+  }
+
+  function portraitSection(id, c) {
+    var inner;
+    if (!state.me.portraits) {
+      inner = '<p class="hint">Lifelike portraits need a ComfyUI server with Z-Image-Turbo (AI Playground includes one). Set COMFYUI_URL in .env to turn this on.</p>';
+    } else if (!id) {
+      inner = '<p class="hint">Create the character first, then generate a lifelike portrait here.</p>';
+    } else {
+      inner = '<textarea id="portraitPrompt" rows="3" placeholder="Leave empty and the AI writes a photo prompt from this character.">' + esc(c.portrait_prompt || "") + "</textarea>" +
+        '<div class="row"><button type="button" class="btn" id="genPortrait">Generate lifelike portrait</button>' +
+        '<span class="hint" id="portraitStatus"></span></div>';
+    }
+    return '<fieldset class="cast portrait"><legend>Portrait <span class="hint">photorealistic, made with Z-Image-Turbo</span></legend>' + inner + "</fieldset>";
   }
 
   // ---------- roleplay chat ----------

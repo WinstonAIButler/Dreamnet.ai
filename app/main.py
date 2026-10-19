@@ -5,6 +5,14 @@ panels) plus the private Dreamnet writing studio served at /.
 """
 import os
 import logging
+
+# Load .env before the app modules read their settings at import time.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -23,12 +31,6 @@ from app.api_routes import router as api_router, init_routes
 from app.admin_routes import router as admin_router, init_admin
 from app.user_routes import router as user_router, init_user
 from app.studio import router as studio_router, init_studio_db
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 # Config
 FEATHERLESS_API_BASE = os.getenv("FEATHERLESS_API_BASE", "https://api.featherless.ai/v1")
@@ -96,6 +98,8 @@ BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="Dreamnet.ai", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+_studio.portraits.PORTRAIT_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/portraits", StaticFiles(directory=str(_studio.portraits.PORTRAIT_DIR)), name="portraits")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # Register routers

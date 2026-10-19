@@ -8,3 +8,5 @@ venv/
 proxy.db
 *.db
 *.bak
+portraits/
+.venv/

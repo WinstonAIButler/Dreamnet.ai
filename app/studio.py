@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import app.api_routes as api_routes
+import app.portraits as portraits
 from app.auth import get_session_from_request
 from app.database import (
     DB_PATH, create_api_key, create_model, get_api_key_by_key, get_model_by_id, list_models,
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS characters (
     greeting TEXT NOT NULL,
     tags TEXT NOT NULL DEFAULT '',
     avatar TEXT NOT NULL DEFAULT '',  -- portrait URL, empty = gradient with initial
+    portrait_prompt TEXT NOT NULL DEFAULT '',
     color TEXT NOT NULL DEFAULT '#be123c',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
@@ -189,6 +191,9 @@ ASSIST_LENGTH = {"short": 350, "medium": 750, "long": 1400}
 async def init_studio_db(db_path: str):
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA)
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(characters)")).fetchall()]
+        if "portrait_prompt" not in cols:
+            await db.execute("ALTER TABLE characters ADD COLUMN portrait_prompt TEXT NOT NULL DEFAULT ''")
         await db.commit()
         n = (await (await db.execute("SELECT COUNT(*) FROM characters")).fetchone())[0]
         if n == 0:
@@ -336,7 +341,7 @@ async def me(request: Request):
     if not s:
         return JSONResponse({"authenticated": False})
     return JSONResponse({"authenticated": True, "username": s["username"], "is_admin": bool(s["is_admin"]),
-                         "default_model": DEFAULT_MODEL})
+                         "default_model": DEFAULT_MODEL, "portraits": portraits.enabled()})
 
 
 @router.get("/models")
@@ -381,6 +386,52 @@ async def save_character(request: Request, s: dict = Depends(_session)):
                       (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
                        f["persona"], greeting, f["tags"][:200], f["avatar"], f["color"] or "#be123c", now, now))
     return JSONResponse({"id": cid})
+
+
+@router.post("/characters/{cid}/portrait")
+async def make_portrait(cid: int, request: Request, s: dict = Depends(_session)):
+    """Generate a lifelike portrait with ComfyUI and set it as the character's picture.
+    With no prompt in the body, the chat model writes one from the character card."""
+    c = await _row("SELECT * FROM characters WHERE id = ?", (cid,))
+    if not c:
+        return _err(404, "Character not found")
+    if not portraits.enabled():
+        return _err(503, "Portraits need a ComfyUI server. Set COMFYUI_URL in .env (see README).")
+    body = await request.json()
+    prompt = str(body.get("prompt") or "").strip()[:4000]
+    if not prompt:
+        prompt = await _portrait_prompt(request, s, c)
+    if mentions_minor(prompt, strict=True):
+        return _err(400, "Portraits must show an adult.")
+    try:
+        png = await portraits.generate(api_routes.http_client, prompt)
+    except portraits.PortraitError as e:
+        return _err(502, str(e))
+    url = portraits.save(cid, png)
+    await _exec("UPDATE characters SET avatar = ?, portrait_prompt = ?, updated_at = ? WHERE id = ?",
+                (url, prompt, time.time(), cid))
+    return JSONResponse({"avatar": url, "prompt": prompt})
+
+
+async def _portrait_prompt(request: Request, s: dict, c: dict) -> str:
+    """Ask the chat model to expand the character card into a Z-Image prompt."""
+    card = (f"Name: {c['name']}\nAge: {c['age']}\nGender: {c['gender']}\nTagline: {c['tagline']}\n"
+            f"Appearance: {c['appearance']}\nPersonality: {c['persona']}")
+    messages = [{"role": "system", "content": portraits.PROMPT_INSTRUCTIONS},
+                {"role": "user", "content": card}]
+    try:
+        key = await _web_key(s["user_id"])
+        cfg = api_routes._resolve_model(await get_model_by_id(DB_PATH, DEFAULT_MODEL))
+        result = await api_routes._handle_blocking(
+            request, {"model": DEFAULT_MODEL, "messages": messages, "temperature": 0.7, "max_tokens": 300},
+            DEFAULT_MODEL, messages, 0.7, cfg, key, s["user_id"], api_routes._is_admin_key(key),
+            key.get("priority", 1), 0.0)
+        text = result["choices"][0]["message"]["content"].strip().strip('"')
+        if len(text) > 40:
+            return text
+    except Exception:
+        pass
+    return portraits.template_prompt(c)
 
 
 @router.delete("/characters/{cid}")
