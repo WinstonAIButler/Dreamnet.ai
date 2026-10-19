@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS characters (
     voice TEXT NOT NULL DEFAULT '',             -- read-aloud voice id, empty = default for gender
     voice_tone TEXT NOT NULL DEFAULT 'natural',
     voice_rate INTEGER NOT NULL DEFAULT 0,      -- speed, percent faster or slower
+    voice_engine TEXT NOT NULL DEFAULT 'edge',  -- edge (online) or voicestudio (on this computer)
+    voice_profile TEXT NOT NULL DEFAULT '',     -- saved VoiceStudio voice id; empty = designed from the character
     color TEXT NOT NULL DEFAULT '#F1916D',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
@@ -393,6 +395,9 @@ async def init_studio_db(db_path: str):
             await db.execute("ALTER TABLE characters ADD COLUMN voice TEXT NOT NULL DEFAULT ''")
             await db.execute("ALTER TABLE characters ADD COLUMN voice_tone TEXT NOT NULL DEFAULT 'natural'")
             await db.execute("ALTER TABLE characters ADD COLUMN voice_rate INTEGER NOT NULL DEFAULT 0")
+        if "voice_engine" not in cols:
+            await db.execute("ALTER TABLE characters ADD COLUMN voice_engine TEXT NOT NULL DEFAULT 'edge'")
+            await db.execute("ALTER TABLE characters ADD COLUMN voice_profile TEXT NOT NULL DEFAULT ''")
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(conversations)")).fetchall()]
         if "summary" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
@@ -729,6 +734,8 @@ def _character_fields(body: dict) -> dict:
         f["voice_rate"] = max(-50, min(50, int(body.get("voice_rate") or 0)))
     except (TypeError, ValueError):
         f["voice_rate"] = 0
+    f["voice_engine"] = body.get("voice_engine") if body.get("voice_engine") in voices.ENGINES else "edge"
+    f["voice_profile"] = str(body.get("voice_profile") or "").strip()[:200]
     return f
 
 
@@ -859,41 +866,63 @@ async def save_character(request: Request, s: dict = Depends(_session)):
     cid = body.get("id")
     if cid:
         await _exec("""UPDATE characters SET name=?, age=?, gender=?, tagline=?, appearance=?, persona=?,
-                       greeting=?, tags=?, color=?, avatar=?, voice=?, voice_tone=?, voice_rate=?, profile=?, updated_at=?
+                       greeting=?, tags=?, color=?, avatar=?, voice=?, voice_tone=?, voice_rate=?,
+                       voice_engine=?, voice_profile=?, profile=?, updated_at=?
                        WHERE id=?""",
                     (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
                      f["persona"], greeting, f["tags"][:200], f["color"] or "#F1916D", f["avatar"],
-                     f["voice"], f["voice_tone"], f["voice_rate"], json.dumps(f["profile"]), now, int(cid)))
+                     f["voice"], f["voice_tone"], f["voice_rate"], f["voice_engine"], f["voice_profile"],
+                     json.dumps(f["profile"]), now, int(cid)))
         return JSONResponse({"id": int(cid)})
     cid = await _exec("""INSERT INTO characters (name, age, gender, tagline, appearance, persona, greeting,
-                         tags, avatar, color, voice, voice_tone, voice_rate, profile, created_at, updated_at)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         tags, avatar, color, voice, voice_tone, voice_rate, voice_engine, voice_profile, profile,
+                         created_at, updated_at)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
                        f["persona"], greeting, f["tags"][:200], f["avatar"], f["color"] or "#F1916D",
-                       f["voice"], f["voice_tone"], f["voice_rate"], json.dumps(f["profile"]), now, now))
+                       f["voice"], f["voice_tone"], f["voice_rate"], f["voice_engine"], f["voice_profile"],
+                       json.dumps(f["profile"]), now, now))
     return JSONResponse({"id": cid})
 
 
 @router.get("/voices")
 async def list_voices(s: dict = Depends(_session)):
     return JSONResponse({"enabled": voices.enabled(), "regions": voices.REGIONS, "voices": voices.VOICES,
-                         "tones": list(voices.TONES), "defaults": voices.DEFAULT_VOICE})
+                         "tones": list(voices.TONES), "defaults": voices.DEFAULT_VOICE,
+                         "voicestudio": await voices.voicestudio_status(api_routes.http_client)})
 
 
 @router.post("/tts")
 async def tts(request: Request, s: dict = Depends(_session)):
-    """Read text aloud in a voice: returns MP3. "mode" picks what to read: all, words_thoughts or words."""
+    """Read text aloud in a voice: returns MP3. "mode" picks what to read: all, words_thoughts or words.
+    With engine "voicestudio" it asks VoiceStudio first and falls back to the online voice."""
     body = await request.json()
     mode = body.get("mode") if body.get("mode") in voices.READ_MODES else "all"
-    text = voices.speakable(str(body.get("text") or ""), mode)
+    raw = str(body.get("text") or "")
+    text = voices.speakable(raw, mode)
     if not text:
         return _err(400, "Nothing to read in that message.")
+    voice, tone, rate = str(body.get("voice") or ""), str(body.get("tone") or "natural"), body.get("rate") or 0
+    headers = {"Cache-Control": "private, max-age=86400"}
+    if body.get("engine") == "voicestudio":
+        try:
+            age = int(body.get("age") or 30)
+        except (TypeError, ValueError):
+            age = 30
+        try:
+            audio = await voices.synthesize_voicestudio(
+                api_routes.http_client, raw, mode, profile=str(body.get("profile") or ""),
+                gender=str(body.get("gender") or "female"), age=age, tone=tone,
+                region=str(body.get("region") or voice[:5] or "en-US"), rate=rate,
+                seed_key=body.get("name") or body.get("character_id") or "")
+            return Response(audio, media_type="audio/mpeg", headers={**headers, "X-Voice-Engine": "voicestudio"})
+        except voices.VoiceError as e:
+            headers["X-Voice-Fallback"] = str(e)[:200]
     try:
-        audio = await voices.synthesize(text, str(body.get("voice") or ""), str(body.get("tone") or "natural"),
-                                        body.get("rate") or 0)
+        audio = await voices.synthesize(text, voice, tone, rate)
     except voices.VoiceError as e:
-        return _err(503, str(e))
-    return Response(audio, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=86400"})
+        return _err(503, headers.get("X-Voice-Fallback") or str(e))
+    return Response(audio, media_type="audio/mpeg", headers={**headers, "X-Voice-Engine": "edge"})
 
 
 @router.post("/characters/{cid}/portrait")

@@ -32,7 +32,7 @@
   // ---------- read aloud ----------
   // Neural voices come from the server (English voices by country); if it can't
   // reach the online voice service, the device's own English voices are used.
-  var voiceInfo = null, player = null, onlineFailed = false;
+  var voiceInfo = null, player = null, onlineFailed = false, vsWarned = false;
   function pref(k, d) { try { var v = localStorage.getItem("dn." + k); return v == null ? d : v; } catch (e) { return d; } }
   function setPref(k, v) { try { localStorage.setItem("dn." + k, v); } catch (e) { /* private mode */ } }
   function loadVoices() {
@@ -63,7 +63,8 @@
     document.querySelectorAll("[data-listen].playing").forEach(function (b) { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
   }
   function voiceFor(c) {
-    return { voice: c.voice || "", tone: c.voice_tone || "natural", rate: +c.voice_rate || 0, gender: c.gender };
+    return { voice: c.voice || "", tone: c.voice_tone || "natural", rate: +c.voice_rate || 0, gender: c.gender,
+      engine: c.voice_engine || "edge", profile: c.voice_profile || "", age: c.age, name: c.name, character_id: c.id };
   }
   // Speak text as a character's voice; resolves when it finishes.
   function speak(text, v, onEnd) {
@@ -71,11 +72,17 @@
     var mode = pref("readMode", "all");
     return loadVoices().then(function (info) {
       var id = v.voice || (info.defaults || {})[v.gender] || "en-US-AvaNeural";
-      if (id.indexOf("device:") === 0 || !info.enabled || onlineFailed) return speakOnDevice(speakableText(text, mode), id, v, onEnd);
+      var studio = v.engine === "voicestudio";
+      if (!studio && (id.indexOf("device:") === 0 || !info.enabled || onlineFailed)) return speakOnDevice(speakableText(text, mode), id, v, onEnd);
       return fetch("/app/api/tts", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text, voice: id, tone: v.tone, rate: v.rate, mode: mode }) })
+        body: JSON.stringify({ text: text, voice: id, tone: v.tone, rate: v.rate, mode: mode, engine: v.engine || "edge",
+          profile: v.profile || "", gender: v.gender, age: v.age, name: v.name, character_id: v.character_id }) })
         .then(function (r) {
           if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) { throw new Error(d.error || "Voice unavailable"); });
+          if (studio && r.headers.get("X-Voice-Fallback") && !vsWarned) {
+            vsWarned = true;
+            toast(r.headers.get("X-Voice-Fallback") + " Using the online voice instead.", true);
+          }
           return r.blob();
         })
         .then(function (blob) {
@@ -86,8 +93,8 @@
         })
         .catch(function (e) {
           if (e.name === "NotAllowedError") { toast("Tap Listen to hear it; your browser blocked autoplay.", true); if (onEnd) onEnd(); return; }
-          onlineFailed = true;
-          toast("Couldn't reach the online voices, so this device's voice is reading instead.", true);
+          if (!studio) onlineFailed = true;
+          toast((studio ? "Couldn't reach VoiceStudio or the online voices" : "Couldn't reach the online voices") + ", so this device's voice is reading instead.", true);
           return speakOnDevice(speakableText(text, mode), id, v, onEnd);
         });
     });
@@ -111,9 +118,15 @@
   if (window.speechSynthesis) speechSynthesis.onvoiceschanged = function () { /* list fills in later on some browsers */ };
 
   function voiceSection(c) {
+    var vs = c.voice_engine === "voicestudio";
     return '<fieldset class="voice-box"><legend>Voice <span class="hint">how ' + esc(c.name || "they") + ' sound when replies are read aloud</span></legend>' +
+      '<div class="two"><label>Engine<select name="voice_engine">' +
+        '<option value="edge"' + (vs ? "" : " selected") + '>Online voices (Microsoft Edge)</option>' +
+        '<option value="voicestudio"' + (vs ? " selected" : "") + '>VoiceStudio on this computer</option></select></label>' +
+      '<label class="vs-only"' + (vs ? "" : " hidden") + '>VoiceStudio voice<select name="voice_profile"><option value="">Designed for ' + esc(c.name || "this character") + '</option></select></label></div>' +
+      '<p class="hint vs-only" id="vsNote"' + (vs ? "" : " hidden") + '></p>' +
       '<div class="two"><label>Country<select name="voice_region"></select></label>' +
-      '<label>Voice<select name="voice"></select></label></div>' +
+      '<label><span id="voiceLbl">' + (vs ? "Backup voice" : "Voice") + '</span><select name="voice"></select></label></div>' +
       '<div class="two"><label>Tone<select name="voice_tone">' + ["deep", "low", "natural", "bright"].map(function (t) {
         return '<option value="' + t + '"' + ((c.voice_tone || "natural") === t ? " selected" : "") + ">" + t.charAt(0).toUpperCase() + t.slice(1) + "</option>"; }).join("") + "</select></label>" +
       '<label>Speed <span class="hint" id="rateShow"></span><input type="range" name="voice_rate" min="-30" max="30" step="5" value="' + (+c.voice_rate || 0) + '"></label></div>' +
@@ -145,11 +158,31 @@
       voiceSel.onchange = function () { current = voiceSel.value; };
       fill();
       if (!info.enabled) document.getElementById("voiceNote").textContent = "Online voices aren't installed; device voices will be used.";
+      // VoiceStudio: a voice designed from gender, age, tone and country (same voice every time), or one saved in VoiceStudio.
+      var vsInfo = info.voicestudio || { online: false, profiles: [], url: "" };
+      var profSel = form.voice_profile, have = false;
+      vsInfo.profiles.forEach(function (p) {
+        if (p.id === c.voice_profile) have = true;
+        profSel.insertAdjacentHTML("beforeend", '<option value="' + esc(p.id) + '">' + esc(p.name) + "</option>");
+      });
+      if (c.voice_profile && !have) profSel.insertAdjacentHTML("beforeend", '<option value="' + esc(c.voice_profile) + '">Saved voice (VoiceStudio is off)</option>');
+      profSel.value = c.voice_profile || "";
+      function showEngine() {
+        var on = form.voice_engine.value === "voicestudio";
+        form.querySelectorAll(".vs-only").forEach(function (el) { el.hidden = !on; });
+        document.getElementById("voiceLbl").textContent = on ? "Backup voice" : "Voice";
+        document.getElementById("vsNote").textContent = !vsInfo.online
+          ? "VoiceStudio isn't running at " + vsInfo.url + ". Start it and reload; until then the backup voice reads."
+          : profSel.value ? "Uses this voice from VoiceStudio. Country and tone don't change it; speed does."
+          : "Designed from gender, age, tone and country, and the same every time. Thoughts are whispered. Accents: American, British, Canadian, Australian or Indian, the closest to the country.";
+      }
+      form.voice_engine.onchange = showEngine; profSel.onchange = showEngine; showEngine();
       function showRate() { var r = +form.voice_rate.value; document.getElementById("rateShow").textContent = r === 0 ? "normal" : (r > 0 ? "+" : "") + r + "%"; }
       form.voice_rate.oninput = showRate; showRate();
       document.getElementById("voicePreview").onclick = function () {
         var sample = form.greeting.value.trim() || '"' + "You found me. I wondered how long it would take." + '"';
-        speak(sample, { voice: voiceSel.value, tone: form.voice_tone.value, rate: +form.voice_rate.value, gender: form.gender.value });
+        speak(sample, { voice: voiceSel.value, tone: form.voice_tone.value, rate: +form.voice_rate.value, gender: form.gender.value,
+          engine: form.voice_engine.value, profile: form.voice_profile.value, age: form.age.value, name: form.name.value, character_id: c.id });
       };
     });
   }
@@ -512,7 +545,7 @@
       form.onsubmit = function (e) {
         e.preventDefault();
         var body = { id: id };
-        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate"].forEach(function (k) { body[k] = form[k].value; });
+        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate", "voice_engine", "voice_profile"].forEach(function (k) { body[k] = form[k].value; });
         body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { toast("Saved"); location.hash = "#/characters"; })
@@ -526,7 +559,7 @@
         status.textContent = promptEl.value.trim() ? "Generating the portrait…" : "Writing a photo prompt, then generating…";
         // Save the card first so the prompt is written from what's on screen.
         var body = { id: id };
-        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate"].forEach(function (k) { body[k] = form[k].value; });
+        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate", "voice_engine", "voice_profile"].forEach(function (k) { body[k] = form[k].value; });
         body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })

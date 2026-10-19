@@ -71,6 +71,16 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   only. All voices are English. They use Microsoft Edge's online Read Aloud
   voices through `edge-tts`, so they need internet; offline, the English voices
   installed on your computer read instead.
+- **VoiceStudio voices (local).** If you run
+  [VoiceStudio](https://github.com/debpalash/VoiceStudio) on your computer, set a
+  character's voice engine to **VoiceStudio on this computer**. By default the
+  character gets a voice designed from their gender, age, tone and country
+  (American, British, Canadian, Australian or Indian accent), and it's the same
+  voice every time. Their private `thoughts` are whispered. You can also pick
+  any voice you designed or cloned in VoiceStudio. It runs offline on your own
+  hardware. If VoiceStudio isn't running, the online voice reads instead.
+  Dreamnet uses VoiceStudio's local API at `VOICESTUDIO_URL` (default
+  `http://127.0.0.1:3900`).
 - **Styled roleplay text.** Spoken "words", *actions* and `thoughts` each have
   their own font and colour, and the characters are told to write that way.
 - **Lifelike portraits.** One click turns a character card into a photorealistic
