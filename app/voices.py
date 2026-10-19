@@ -10,6 +10,7 @@ Two engines:
 When neither answers, the web app falls back to the English voices on your device.
 """
 import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -47,7 +48,7 @@ _VOICES = {
     "en-US": [("Andrew", "male"), ("Brian", "male"), ("Christopher", "male"), ("Eric", "male"), ("Guy", "male"),
               ("Roger", "male"), ("Steffan", "male"),
               ("Ava", "female"), ("Aria", "female"), ("Emma", "female"), ("Jenny", "female"), ("Michelle", "female")],
-    "en-GB": [("Ryan", "male"), ("Thomas", "male"), ("Sonia", "female"), ("Libby", "female"), ("Maisie", "female")],
+    "en-GB": [("Ryan", "male"), ("Thomas", "male"), ("Sonia", "female"), ("Libby", "female")],
     "en-AU": [("William", "male"), ("Natasha", "female")],
     "en-CA": [("Liam", "male"), ("Clara", "female")],
     "en-IE": [("Connor", "male"), ("Emily", "female")],
@@ -60,8 +61,7 @@ _VOICES = {
     "en-KE": [("Chilemba", "male"), ("Asilia", "female")],
     "en-TZ": [("Elimu", "male"), ("Imani", "female")],
     "en-HK": [("Sam", "male"), ("Yan", "female")],
-    "fr-FR": [("RemyMultilingual", "male"), ("Henri", "male"), ("VivienneMultilingual", "female"), ("Denise", "female"),
-              ("Eloise", "female")],
+    "fr-FR": [("RemyMultilingual", "male"), ("Henri", "male"), ("VivienneMultilingual", "female"), ("Denise", "female")],
     "de-DE": [("FlorianMultilingual", "male"), ("Conrad", "male"), ("Killian", "male"),
               ("SeraphinaMultilingual", "female"), ("Katja", "female"), ("Amala", "female")],
     "it-IT": [("GiuseppeMultilingual", "male"), ("Diego", "male"), ("Isabella", "female"), ("Elsa", "female")],
@@ -136,6 +136,75 @@ async def voicestudio_status(client: httpx.AsyncClient) -> dict:
         return {"online": False, "url": VOICESTUDIO_URL, "profiles": []}
 
 
+# Accent voice presets: accent x age group x gender x sound. Each picks an Edge
+# voice from that accent (different ones per age where there are several) and
+# shifts pitch and speed for age and sound; the web app adds the sound's audio
+# effect (reverb, darkness, the doubled "possessed" voice) on playback.
+ACCENTS = {  # key: (label, {gender: [voices for young, middle, older, elder]})
+    "irish": ("Irish", {"male": ["en-IE-ConnorNeural"] * 4, "female": ["en-IE-EmilyNeural"] * 4}),
+    "french": ("French", {"male": ["fr-FR-RemyMultilingualNeural", "fr-FR-RemyMultilingualNeural",
+                                   "fr-FR-HenriNeural", "fr-FR-HenriNeural"],
+                          "female": ["fr-FR-VivienneMultilingualNeural", "fr-FR-VivienneMultilingualNeural",
+                                     "fr-FR-DeniseNeural", "fr-FR-DeniseNeural"]}),
+    "german": ("German", {"male": ["de-DE-FlorianMultilingualNeural", "de-DE-FlorianMultilingualNeural",
+                                   "de-DE-ConradNeural", "de-DE-KillianNeural"],
+                          "female": ["de-DE-SeraphinaMultilingualNeural", "de-DE-AmalaNeural",
+                                     "de-DE-KatjaNeural", "de-DE-KatjaNeural"]}),
+    "nordic": ("Nordic", {"male": ["sv-SE-MattiasNeural", "nb-NO-FinnNeural", "da-DK-JeppeNeural", "fi-FI-HarriNeural"],
+                          "female": ["sv-SE-SofieNeural", "nb-NO-PernilleNeural", "da-DK-ChristelNeural",
+                                     "fi-FI-NooraNeural"]}),
+    "italian": ("Italian", {"male": ["it-IT-GiuseppeMultilingualNeural", "it-IT-GiuseppeMultilingualNeural",
+                                     "it-IT-DiegoNeural", "it-IT-DiegoNeural"],
+                            "female": ["it-IT-IsabellaNeural", "it-IT-IsabellaNeural", "it-IT-ElsaNeural",
+                                       "it-IT-ElsaNeural"]}),
+    "russian": ("Russian", {"male": ["ru-RU-DmitryNeural"] * 4, "female": ["ru-RU-SvetlanaNeural"] * 4}),
+}
+AGES = {  # key: (label, index into the voice lists, pitch Hz, speed %, VoiceStudio age tag)
+    "young": ("Young (18-25)", 0, 6, 5, "young adult"),
+    "middle": ("Middle-aged (26-35)", 1, 0, 0, "young adult"),
+    "older": ("Older (36-60)", 2, -5, -4, "middle-aged"),
+    "elder": ("Elder (61-80)", 3, -10, -12, "elderly"),
+}
+SOUNDS = {  # key: (label, pitch Hz, speed %, VoiceStudio pitch tag)
+    "innocent": ("Innocent", 8, 3, "high pitch"),
+    "mysterious": ("Mysterious", -6, -10, "low pitch"),
+    "villain": ("Villain", -12, -6, "low pitch"),
+    "possessed": ("Possessed", -22, -14, "very low pitch"),
+}
+VS_PRESET_ACCENT = {"russian": "russian accent"}  # the only one of these VoiceStudio has built in
+
+
+def clean_style(raw) -> dict:
+    """A character's accent preset, {"accent", "age", "gender", "sound"}, or {} for none."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {}
+    raw = raw if isinstance(raw, dict) else {}
+    if raw.get("accent") not in ACCENTS:
+        return {}
+    return {"accent": raw["accent"], "age": raw.get("age") if raw.get("age") in AGES else "middle",
+            "gender": raw.get("gender") if raw.get("gender") in ("male", "female") else "female",
+            "sound": raw.get("sound") if raw.get("sound") in SOUNDS else "mysterious"}
+
+
+def preset(style: dict, rate: int = 0) -> dict:
+    """Edge voice, pitch and speed for an accent preset, plus VoiceStudio design tags when it has the accent."""
+    _, idx, age_hz, age_rate, vs_age = AGES[style["age"]]
+    _, snd_hz, snd_rate, vs_pitch = SOUNDS[style["sound"]]
+    vs = None
+    if style["accent"] in VS_PRESET_ACCENT:
+        vs = [style["gender"], vs_age, vs_pitch, VS_PRESET_ACCENT[style["accent"]]]
+    return {"voice": ACCENTS[style["accent"]][1][style["gender"]][idx], "pitch": f"{age_hz + snd_hz:+d}Hz",
+            "rate": max(-50, min(50, age_rate + snd_rate + int(rate))), "vs_tags": vs}
+
+
+def preset_catalog() -> dict:
+    return {"accents": [[k, v[0]] for k, v in ACCENTS.items()], "ages": [[k, v[0]] for k, v in AGES.items()],
+            "sounds": [[k, v[0]] for k, v in SOUNDS.items()]}
+
+
 # What to read aloud from a roleplay reply.
 READ_MODES = ("all", "words_thoughts", "words")
 
@@ -172,13 +241,13 @@ def speakable(text: str, mode: str = "all") -> str:
     return " ".join(t for _, t in segments(text, mode))[:5000]
 
 
-async def synthesize(text: str, voice: str, tone: str = "natural", rate: int = 0) -> bytes:
-    """MP3 audio for text in the given voice, cached on disk."""
+async def synthesize(text: str, voice: str, tone: str = "natural", rate: int = 0, pitch: str | None = None) -> bytes:
+    """MP3 audio for text in the given voice, cached on disk. "pitch" (e.g. "-12Hz") overrides the tone."""
     if not enabled():
         raise VoiceError("Read-aloud voices need the edge-tts package. Run the launcher again to install it.")
     if voice not in VOICE_IDS:
         raise VoiceError("Pick one of the listed voices.")
-    pitch = TONES.get(tone, "+0Hz")
+    pitch = pitch or TONES.get(tone, "+0Hz")
     rate = max(-50, min(50, int(rate)))
     key = hashlib.sha256(f"{voice}|{pitch}|{rate}|{text}".encode()).hexdigest()[:32]
     path = TTS_CACHE / f"{key}.mp3"
@@ -201,7 +270,7 @@ async def synthesize(text: str, voice: str, tone: str = "natural", rate: int = 0
 
 async def synthesize_voicestudio(client: httpx.AsyncClient, text: str, mode: str, *, profile: str = "",
                                  gender: str = "female", age: int = 30, tone: str = "natural",
-                                 region: str = "en-US", rate: int = 0, seed_key="") -> bytes:
+                                 region: str = "en-US", rate: int = 0, seed_key="", tags: list | None = None) -> bytes:
     """MP3 from VoiceStudio, cached on disk. A saved VoiceStudio voice is used as is; otherwise the voice is
     designed from the character. Designed voices whisper the character's private thoughts."""
     runs: list[list] = []
@@ -222,7 +291,8 @@ async def synthesize_voicestudio(client: httpx.AsyncClient, text: str, mode: str
         if profile:
             body["voice"] = profile
         else:
-            body["instruct"] = vs_design(gender, int(age), tone, region, whisper)
+            body["instruct"] = (", ".join(tags[:3] + (["whisper"] if whisper else []) + tags[3:]) if tags
+                                else vs_design(gender, int(age), tone, region, whisper))
         bodies.append(body)
     key = hashlib.sha256(repr(bodies).encode()).hexdigest()[:32]
     path = TTS_CACHE / f"vs-{key}.mp3"

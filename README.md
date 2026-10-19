@@ -75,6 +75,16 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   only. All voices are English. They use Microsoft Edge's online Read Aloud
   voices through `edge-tts`, so they need internet; offline, the English voices
   installed on your computer read instead.
+- **Accent voices.** The quickest way to voice a character: pick an accent
+  (Irish, French, German, Nordic, Italian or Russian, all speaking English),
+  an age group (young 18-25, middle-aged 26-35, older 36-60, elder 61-80),
+  male or female, and a sound: innocent (brighter and lighter), mysterious
+  (slower, softer, with a dark room echo), villain (lower, harder, a little
+  grit) or possessed (very low and slow, distorted, with a second, deeper copy
+  of the voice dragging under it). That gives 192 combinations. Age and sound
+  change the voice's pitch and speed, and the effects are added as it plays.
+  The Nordic accent uses Swedish, Norwegian, Danish and Finnish voices for the
+  four age groups.
 - **VoiceStudio voices (local).** If you run
   [VoiceStudio](https://github.com/debpalash/VoiceStudio) on your computer, set a
   character's voice engine to **VoiceStudio on this computer**. By default the

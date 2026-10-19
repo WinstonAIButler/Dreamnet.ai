@@ -471,3 +471,5 @@ a.card.new { text-decoration: none; }
 .prow textarea { min-height: 0 !important; }
 .lock { background: var(--bg-2); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; font-size: 12px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
 .lock.on { border-color: var(--accent); color: var(--accent); background: rgba(241,145,109,.1); }
+.preset-box { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); }
+.preset-box .hint { margin: 0; }

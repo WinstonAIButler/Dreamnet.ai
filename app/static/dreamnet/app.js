@@ -57,14 +57,72 @@
     });
     return out.join(" ").replace(/\s+/g, " ").trim();
   }
+  // Sound effects for accent presets, applied as the voice plays (online or VoiceStudio audio).
+  var actx = null;
+  function audioCtx() {
+    if (!actx) { var C = window.AudioContext || window.webkitAudioContext; if (C) actx = new C(); }
+    return actx;
+  }
+  function impulse(ctx, secs, decay) {  // a simple room: decaying noise
+    var len = Math.floor(ctx.sampleRate * secs), buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (var ch = 0; ch < 2; ch++) {
+      var d = buf.getChannelData(ch);
+      for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return buf;
+  }
+  function filter(ctx, type, freq, gain) {
+    var f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; if (gain) f.gain.value = gain; return f;
+  }
+  function grit(ctx, amount) {
+    var ws = ctx.createWaveShaper(), n = 1024, curve = new Float32Array(n);
+    for (var i = 0; i < n; i++) { var x = i * 2 / n - 1; curve[i] = (1 + amount) * x / (1 + amount * Math.abs(x)); }
+    ws.curve = curve; return ws;
+  }
+  var SOUND_FX = {  // [filters, grit, reverb seconds, reverb mix]
+    innocent: function (ctx) { return [[filter(ctx, "highshelf", 3500, 4)], 0, 0.8, 0.08]; },
+    mysterious: function (ctx) { return [[filter(ctx, "lowpass", 6000)], 0, 2.6, 0.35]; },
+    villain: function (ctx) { return [[filter(ctx, "lowshelf", 220, 6), ctx.createDynamicsCompressor()], 3, 1.2, 0.15]; },
+    possessed: function (ctx) { return [[filter(ctx, "lowshelf", 160, 8), filter(ctx, "lowpass", 5000)], 10, 3.2, 0.45]; }
+  };
+  function playAudio(blob, sound) {
+    var url = URL.createObjectURL(blob), a = new Audio(url), ctx = SOUND_FX[sound] ? audioCtx() : null;
+    if (!ctx) return a;
+    try {
+      if (ctx.state === "suspended") ctx.resume();
+      var fx = SOUND_FX[sound](ctx), head = ctx.createMediaElementSource(a);
+      var out = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain(), verb = ctx.createConvolver();
+      out.connect(ctx.destination); dry.connect(out); verb.connect(wet); wet.connect(out);
+      fx[0].forEach(function (n) { head.connect(n); head = n; });
+      if (fx[1]) { var g = grit(ctx, fx[1]); head.connect(g); head = g; }
+      verb.buffer = impulse(ctx, fx[2], 2.5); wet.gain.value = fx[3]; dry.gain.value = 1 - fx[3] / 2;
+      head.connect(dry); head.connect(verb);
+      if (sound === "possessed") {  // a second, slower and deeper copy of the voice dragging under the first
+        var b = new Audio(url);
+        b.preservesPitch = b.mozPreservesPitch = b.webkitPreservesPitch = false;
+        b.playbackRate = 0.9;
+        var g2 = ctx.createGain(); g2.gain.value = 0.55;
+        ctx.createMediaElementSource(b).connect(g2); g2.connect(verb); g2.connect(dry);
+        a.echo = b;
+        a.addEventListener("play", function () { b.play().catch(function () {}); });
+      }
+    } catch (e) { /* no effects on this browser; the plain voice still plays */ }
+    return a;
+  }
   function stopSpeaking() {
-    if (player) { player.pause(); player = null; }
+    if (player) { player.pause(); if (player.echo) player.echo.pause(); player = null; }
     if (window.speechSynthesis) speechSynthesis.cancel();
     document.querySelectorAll("[data-listen].playing").forEach(function (b) { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
   }
   function voiceFor(c) {
     return { voice: c.voice || "", tone: c.voice_tone || "natural", rate: +c.voice_rate || 0, gender: c.gender,
-      engine: c.voice_engine || "edge", profile: c.voice_profile || "", age: c.age, name: c.name, character_id: c.id };
+      engine: c.voice_engine || "edge", profile: c.voice_profile || "", age: c.age, name: c.name, character_id: c.id,
+      style: parseStyle(c.voice_style) };
+  }
+  function parseStyle(raw) {
+    if (!raw) return null;
+    if (typeof raw === "object") return raw.accent ? raw : null;
+    try { var st = JSON.parse(raw); return st && st.accent ? st : null; } catch (e) { return null; }
   }
   // Speak text as a character's voice; resolves when it finishes.
   function speak(text, v, onEnd) {
@@ -76,7 +134,7 @@
       if (!studio && (id.indexOf("device:") === 0 || !info.enabled || onlineFailed)) return speakOnDevice(speakableText(text, mode), id, v, onEnd);
       return fetch("/app/api/tts", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: text, voice: id, tone: v.tone, rate: v.rate, mode: mode, engine: v.engine || "edge",
-          profile: v.profile || "", gender: v.gender, age: v.age, name: v.name, character_id: v.character_id }) })
+          profile: v.profile || "", gender: v.gender, age: v.age, name: v.name, character_id: v.character_id, style: v.style || null }) })
         .then(function (r) {
           if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) { throw new Error(d.error || "Voice unavailable"); });
           if (studio && r.headers.get("X-Voice-Fallback") && !vsWarned) {
@@ -86,7 +144,7 @@
           return r.blob();
         })
         .then(function (blob) {
-          var a = new Audio(URL.createObjectURL(blob));
+          var a = playAudio(blob, v.style && v.style.sound);
           player = a;
           a.onended = function () { if (player === a) player = null; if (onEnd) onEnd(); };
           return a.play();
@@ -118,19 +176,30 @@
   if (window.speechSynthesis) speechSynthesis.onvoiceschanged = function () { /* list fills in later on some browsers */ };
 
   function voiceSection(c) {
-    var vs = c.voice_engine === "voicestudio";
+    var vs = c.voice_engine === "voicestudio", usePreset = !!parseStyle(c.voice_style) || !c.id;
     return '<fieldset class="voice-box"><legend>Voice <span class="hint">how ' + esc(c.name || "they") + ' sound when replies are read aloud</span></legend>' +
       '<div class="two"><label>Engine<select name="voice_engine">' +
         '<option value="edge"' + (vs ? "" : " selected") + '>Online voices (Microsoft Edge)</option>' +
         '<option value="voicestudio"' + (vs ? " selected" : "") + '>VoiceStudio on this computer</option></select></label>' +
       '<label class="vs-only"' + (vs ? "" : " hidden") + '>VoiceStudio voice<select name="voice_profile"><option value="">Designed for ' + esc(c.name || "this character") + '</option></select></label></div>' +
       '<p class="hint vs-only" id="vsNote"' + (vs ? "" : " hidden") + '></p>' +
-      '<div class="two"><label>Country<select name="voice_region"></select></label>' +
+      '<div class="two"><label>Voice type<select name="voice_kind"><option value="preset"' + (usePreset ? " selected" : "") + '>Accent voice (accent, age, sound)</option>' +
+        '<option value="country"' + (usePreset ? "" : " selected") + '>Pick by country</option></select></label><span></span></div>' +
+      '<div class="preset-box" id="presetBox">' +
+        '<div class="two"><label>Accent<select name="vp_accent"></select></label><label>Age<select name="vp_age"></select></label></div>' +
+        '<div class="two"><label>Gender<select name="vp_gender"><option value="male">Male</option><option value="female">Female</option></select></label>' +
+        '<label>Sound<select name="vp_sound"></select></label></div>' +
+        '<p class="hint" id="presetNote"></p></div>' +
+      '<div class="two country-only"><label>Country<select name="voice_region"></select></label>' +
       '<label><span id="voiceLbl">' + (vs ? "Backup voice" : "Voice") + '</span><select name="voice"></select></label></div>' +
-      '<div class="two"><label>Tone<select name="voice_tone">' + ["deep", "low", "natural", "bright"].map(function (t) {
+      '<div class="two"><label class="country-only">Tone<select name="voice_tone">' + ["deep", "low", "natural", "bright"].map(function (t) {
         return '<option value="' + t + '"' + ((c.voice_tone || "natural") === t ? " selected" : "") + ">" + t.charAt(0).toUpperCase() + t.slice(1) + "</option>"; }).join("") + "</select></label>" +
       '<label>Speed <span class="hint" id="rateShow"></span><input type="range" name="voice_rate" min="-30" max="30" step="5" value="' + (+c.voice_rate || 0) + '"></label></div>' +
       '<div class="row"><button type="button" class="btn small" id="voicePreview">▶ Preview voice</button><span class="hint" id="voiceNote"></span></div></fieldset>';
+  }
+  function formStyle(form) {
+    return form.voice_kind && form.voice_kind.value === "preset" && form.vp_accent.value
+      ? { accent: form.vp_accent.value, age: form.vp_age.value, gender: form.vp_gender.value, sound: form.vp_sound.value } : null;
   }
   function wireVoiceSection(form, c) {
     loadVoices().then(function (info) {
@@ -182,13 +251,32 @@
           : profSel.value ? "Uses this voice from VoiceStudio. Country and tone don't change it; speed does."
           : "Designed from gender, age, tone and country, and the same every time. Thoughts are whispered. Accents: American, British, Canadian, Australian, Indian, Russian or Portuguese, the closest to the country. For another European accent, clone or design one in VoiceStudio and pick it above.";
       }
-      form.voice_engine.onchange = showEngine; profSel.onchange = showEngine; showEngine();
+      form.voice_engine.onchange = function () { showEngine(); showKind(); }; profSel.onchange = showEngine; showEngine();
+      // Accent voices: accent x age x gender x sound.
+      var pre = info.presets || { accents: [], ages: [], sounds: [] }, st = parseStyle(c.voice_style) || {};
+      function opts(list, cur) { return list.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === cur ? " selected" : "") + ">" + esc(x[1]) + "</option>"; }).join(""); }
+      form.vp_accent.innerHTML = opts(pre.accents, st.accent || "irish");
+      form.vp_age.innerHTML = opts(pre.ages, st.age || (+form.age.value <= 25 ? "young" : +form.age.value <= 35 ? "middle" : +form.age.value <= 60 || +form.age.value > 100 ? "older" : "elder"));
+      form.vp_sound.innerHTML = opts(pre.sounds, st.sound || "mysterious");
+      form.vp_gender.value = st.gender || (form.gender.value === "male" ? "male" : "female");
+      function showKind() {
+        var preset = form.voice_kind.value === "preset";
+        document.getElementById("presetBox").hidden = !preset;
+        form.querySelectorAll(".country-only").forEach(function (el) { el.hidden = preset; });
+        var vsOn = form.voice_engine.value === "voicestudio" && !form.voice_profile.value;
+        document.getElementById("presetNote").textContent = !preset ? "" :
+          vsOn && form.vp_accent.value !== "russian" ? "VoiceStudio has no " + form.vp_accent.selectedOptions[0].textContent + " accent built in, so this preset reads with the online voices. Pick a saved VoiceStudio voice to use your own." :
+          "Every accent speaks English. The sound changes the delivery and adds an effect as it plays.";
+      }
+      [form.voice_kind, form.vp_accent].forEach(function (el) { el.addEventListener("change", showKind); });
+      showKind();
       function showRate() { var r = +form.voice_rate.value; document.getElementById("rateShow").textContent = r === 0 ? "normal" : (r > 0 ? "+" : "") + r + "%"; }
       form.voice_rate.oninput = showRate; showRate();
       document.getElementById("voicePreview").onclick = function () {
         var sample = form.greeting.value.trim() || '"' + "You found me. I wondered how long it would take." + '"';
         speak(sample, { voice: voiceSel.value, tone: form.voice_tone.value, rate: +form.voice_rate.value, gender: form.gender.value,
-          engine: form.voice_engine.value, profile: form.voice_profile.value, age: form.age.value, name: form.name.value, character_id: c.id });
+          engine: form.voice_engine.value, profile: form.voice_profile.value, age: form.age.value, name: form.name.value, character_id: c.id,
+          style: formStyle(form) });
       };
     });
   }
@@ -552,6 +640,7 @@
         e.preventDefault();
         var body = { id: id };
         ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate", "voice_engine", "voice_profile"].forEach(function (k) { body[k] = form[k].value; });
+        body.voice_style = formStyle(form) || "";
         body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { toast("Saved"); location.hash = "#/characters"; })
@@ -566,6 +655,7 @@
         // Save the card first so the prompt is written from what's on screen.
         var body = { id: id };
         ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate", "voice_engine", "voice_profile"].forEach(function (k) { body[k] = form[k].value; });
+        body.voice_style = formStyle(form) || "";
         body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })
