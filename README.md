@@ -36,6 +36,21 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   one set in that place) or you do, and they reply to your first message. The
   scene starts with a marker showing where it is. "Use their usual opening"
   keeps the saved opening line.
+- **Roleplay screen.** Your scenes in a searchable list on the left (storylines
+  on their own tab), the scene in the middle over a dimmed portrait of the
+  character, and the character's panel on the right: their portrait and this
+  scene's pictures, a short scenario, **Call** (talk out loud and hear the
+  replies, in browsers that can listen), **New session** and **View media**.
+  Under each reply: copy, edit, regenerate, continue, and a menu for pictures,
+  time and rewind. The read-aloud button plays the reply as a voice note. The
+  message box picks how your text is sent (as typed, said, done or thought),
+  makes a picture of the moment, writes or polishes your reply with the wand,
+  and takes speech from the mic.
+- **Turn a roleplay into a manuscript.** From the character panel, the AI
+  rewrites a scene, or its whole storyline, as chapters of a new novel or as new
+  chapters in one you have: every event and key line kept, in book prose. You
+  pick the point of view and your character's name; chapters appear as they're
+  written, and you edit and export them like any novel.
 - **Realistic photos on every choice.** The creator and the place picker show a
   photorealistic picture on each tile, never emoji or cartoons. They are made
   once on your own ComfyUI and kept in `PORTRAIT_DIR/options`; without ComfyUI

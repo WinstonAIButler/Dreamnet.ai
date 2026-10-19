@@ -32,7 +32,7 @@
   // ---------- read aloud ----------
   // Neural voices come from the server (English voices by country); if it can't
   // reach the online voice service, the device's own English voices are used.
-  var voiceInfo = null, player = null, onlineFailed = false, vsWarned = false;
+  var voiceInfo = null, player = null, onlineFailed = false, vsWarned = false, voiceHook = null;
   function pref(k, d) { try { var v = localStorage.getItem("dn." + k); return v == null ? d : v; } catch (e) { return d; } }
   function setPref(k, v) { try { localStorage.setItem("dn." + k, v); } catch (e) { /* private mode */ } }
   function loadVoices() {
@@ -112,7 +112,7 @@
   function stopSpeaking() {
     if (player) { player.pause(); if (player.echo) player.echo.pause(); player = null; }
     if (window.speechSynthesis) speechSynthesis.cancel();
-    document.querySelectorAll("[data-listen].playing").forEach(function (b) { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
+    if (voiceHook) voiceHook();
   }
   function voiceFor(c) {
     return { voice: c.voice || "", tone: c.voice_tone || "natural", rate: +c.voice_rate || 0, gender: c.gender,
@@ -502,6 +502,56 @@
   function stripTimeTags(text, typing) {
     text = String(text || "").replace(/[*_]*\[\s*(time passed|elapsed time|current time)\s*:[^\]]*\][*_]*/gi, "");
     return (typing ? text.replace(/\[[^\]]*$/, "") : text).replace(/\s+$/, "");
+  }
+  // Line icons (no emoji anywhere in the interface).
+  var ICONS = {
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    chatplus: '<path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/>',
+    search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+    panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+    panelr: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+    clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+    speaker: '<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
+    book: '<path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h10"/>',
+    trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+    chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+    quote: '<path d="M7 7c-2 1-3 3-3 6h4v-4H6M15 7c-2 1-3 3-3 6h4v-4h-2"/>',
+    hand: '<path d="M8 13V6a1.5 1.5 0 0 1 3 0v6M11 11V4.5a1.5 1.5 0 0 1 3 0V11M14 11V6a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-1a5 5 0 0 1-4-2l-3-4a1.5 1.5 0 0 1 2.3-2L8 14"/>',
+    thought: '<path d="M7 15a4 4 0 0 1-.5-8A5 5 0 0 1 16 6a4 4 0 0 1 1 9z"/><circle cx="8" cy="19" r="1.2"/><circle cx="5" cy="21" r=".6"/>',
+    down: '<path d="M7 10l5 5 5-5"/>',
+    image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 8"/>',
+    wand: '<path d="M4 20L15 9M13 7l4 4"/><path d="M18 3v3M16.5 4.5h3M20 9v2M19 10h2M9 3v2M8 4h2"/>',
+    mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>',
+    send: '<path d="M4 12l16-8-6 16-3-7z"/>',
+    left: '<path d="M15 6l-6 6 6 6"/>',
+    right: '<path d="M9 6l6 6-6 6"/>',
+    phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>',
+    more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+    media: '<rect x="3" y="7" width="14" height="13" rx="2"/><path d="M7 3h14v13"/><path d="M17 17l-4-4-7 7"/>',
+    pin: '<path d="M12 21s-6-6-6-11a6 6 0 0 1 12 0c0 5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+    refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/>',
+    skip: '<path d="M6 5l9 7-9 7z"/><path d="M18 5v14"/>',
+    rewind: '<path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5"/>',
+    play: '<path d="M8 5l11 7-11 7z" fill="currentColor"/>',
+    pause: '<path d="M8 5v14M16 5v14" stroke-width="3"/>',
+    dots: '<circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/>'
+  };
+  function ic(name) {
+    return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICONS[name] || "") + "</svg>";
+  }
+  function shortWhen(ts) {
+    if (!ts) return "";
+    var d = new Date(ts * 1000), now = new Date(), y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === now.toDateString()) return clock(ts);
+    if (d.toDateString() === y.toDateString()) return "Yesterday";
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  function fmtSecs(s) {
+    if (!s || !isFinite(s)) return "";
+    s = Math.round(s); return Math.floor(s / 60) + ":" + ("0" + s % 60).slice(-2);
   }
   function dayLabel(ts) {
     return new Date(ts * 1000).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
@@ -1056,14 +1106,14 @@
       var convs = r[0], conv = r[1], stories = r[2], chars = r[3];
       if (!conv && convs.length) { location.replace("#/chat/" + convs[0].id); return; }
       var charOptions = chars.map(function (ch) { return '<option value="' + ch.id + '">' + esc(ch.name) + "</option>"; }).join("");
-      // Sidebar: storylines, newest first, each with its scenes.
-      var side = '<aside class="sidebar"><h4>Storylines<button type="button" class="side-toggle side-close" title="Close">×</button></h4>' + stories.map(function (st) {
+      // Left: your chats, newest first, with search; storylines on their own tab.
+      var stSide = stories.map(function (st) {
         var mine = convs.filter(function (cv) { return cv.storyline_id === st.id; });
         var open = conv && conv.storyline && conv.storyline.id === st.id;
         return '<div class="story' + (open ? " open" : "") + '" data-story="' + st.id + '">' +
           '<div class="story-head"><b title="' + esc(st.premise) + '">' + esc(st.title) + "</b>" +
-          '<button type="button" data-editstory="' + st.id + '" title="Edit storyline">✎</button>' +
-          '<button type="button" data-addscene="' + st.id + '" title="New scene in this storyline">＋</button></div>' +
+          '<button type="button" data-editstory="' + st.id + '" title="Edit storyline">' + ic("edit") + "</button>" +
+          '<button type="button" data-addscene="' + st.id + '" title="New scene in this storyline">' + ic("plus") + "</button></div>" +
           '<form class="story-form" data-sceneform="' + st.id + '" hidden><select name="character">' + charOptions + "</select>" +
           '<button class="btn small primary">Start scene</button></form>' +
           '<form class="story-form" data-editform="' + st.id + '" hidden><input name="title" maxlength="120" value="' + esc(st.title) + '">' +
@@ -1077,13 +1127,40 @@
         '<textarea name="premise" rows="3" placeholder="Premise (optional): who you are, where it starts, what\'s at stake"></textarea>' +
         '<label>First character<select name="character">' + charOptions + "</select></label>" +
         '<label>Story starts<input type="datetime-local" name="start"></label>' +
-        '<button class="btn small primary">Start storyline</button></form></aside>';
+        '<button class="btn small primary">Start storyline</button></form>';
+      var tab = pref("rpTab", "chats");
+      var side = '<aside class="sidebar rp-list">' +
+        '<div class="rp-list-head"><button type="button" class="icon-btn side-toggle side-close" title="Close">' + ic("x") + "</button>" +
+        '<h3>Chats</h3><a class="btn small light" href="#/characters">' + ic("chatplus") + " New chat</a></div>" +
+        '<div class="rp-tabs" role="tablist"><button type="button" data-tab="chats"' + (tab === "chats" ? ' class="on"' : "") + ">Scenes</button>" +
+        '<button type="button" data-tab="stories"' + (tab === "stories" ? ' class="on"' : "") + ">Storylines</button></div>" +
+        '<div class="rp-chats"' + (tab === "chats" ? "" : " hidden") + '><label class="rp-search">' + ic("search") +
+        '<input type="search" id="chatSearch" placeholder="Search" aria-label="Search chats"></label>' +
+        (convs.map(function (cv) {
+          var snip = stripTimeTags(cv.last || "").replace(/[*`_]/g, "");
+          return '<a class="rp-row' + (cv.id === convId ? " active" : "") + '" href="#/chat/' + cv.id + '" data-q="' +
+            esc((cv.name + " " + (cv.storyline_title || "") + " " + (cv.novel_title || "") + " " + snip).toLowerCase()) + '">' + avatar(cv) +
+            '<div class="meta"><b>' + esc(cv.name) + "</b>" + (cv.storyline_title ? "<small>" + esc(cv.storyline_title) + "</small>" : "") +
+            "<span>" + esc(snip) + "</span></div><time>" + esc(shortWhen(cv.updated_at)) + "</time></a>";
+        }).join("") || '<p class="muted pad">No scenes yet. Pick a character to start one.</p>') + "</div>" +
+        '<div class="rp-stories"' + (tab === "stories" ? "" : " hidden") + ">" + stSide + "</div></aside>";
       function wireSidebar() {
         var sb = view.querySelector(".sidebar");
+        var search = document.getElementById("chatSearch");
+        if (search) search.oninput = function () {
+          var q = search.value.trim().toLowerCase();
+          sb.querySelectorAll(".rp-row").forEach(function (a) { a.hidden = q && a.dataset.q.indexOf(q) < 0; });
+        };
         sb.onclick = function (e) {
           var b = e.target.closest("button");
           if (!b) return;
-          if (b.classList.contains("side-close")) { view.querySelector(".chat-layout").classList.remove("show-side"); }
+          if (b.dataset.tab) {
+            setPref("rpTab", b.dataset.tab);
+            sb.querySelectorAll("[data-tab]").forEach(function (x) { x.classList.toggle("on", x === b); });
+            sb.querySelector(".rp-chats").hidden = b.dataset.tab !== "chats";
+            sb.querySelector(".rp-stories").hidden = b.dataset.tab !== "stories";
+          }
+          else if (b.classList.contains("side-close")) { view.querySelector(".chat-layout").classList.remove("show-side"); }
           else if (b.id === "newStoryBtn") { document.getElementById("newStory").hidden = !document.getElementById("newStory").hidden; }
           else if (b.dataset.addscene) { var f = sb.querySelector('[data-sceneform="' + b.dataset.addscene + '"]'); f.hidden = !f.hidden; }
           else if (b.dataset.editstory) { var g = sb.querySelector('[data-editform="' + b.dataset.editstory + '"]'); g.hidden = !g.hidden; }
@@ -1114,21 +1191,28 @@
         };
       }
       if (!conv) {
-        view.innerHTML = '<div class="chat-layout">' + side + '<section class="chat"><div class="empty"><button type="button" class="btn small ghost side-toggle" onclick="this.closest(\'.chat-layout\').classList.toggle(\'show-side\')">☰ Storylines</button><br>Start a storyline, or pick a character to begin.<br><br><a class="btn primary" href="#/characters">Choose a character</a></div></section></div>';
+        view.innerHTML = '<div class="chat-layout rp">' + side + '<section class="chat rp-chat"><div class="empty"><button type="button" class="btn small ghost side-toggle" onclick="this.closest(\'.chat-layout\').classList.toggle(\'show-side\')">' + ic("panel") + ' Chats</button><br>Start a storyline, or pick a character to begin.<br><br><a class="btn primary" href="#/characters">Choose a character</a></div></section></div>';
         wireSidebar();
         return;
       }
       var c = conv.character;
-      view.innerHTML = '<div class="chat-layout">' + side +
-        '<section class="chat">' +
-        '<div class="chat-head"><button type="button" class="btn small ghost side-toggle" id="sideBtn" title="Storylines and scenes">☰</button>' + avatar(c) + '<div class="grow"><b>' + esc(c.name) + "</b><p>" +
+      var wide = window.matchMedia("(min-width: 1280px)").matches;
+      var panelOpen = wide && pref("rpPanel", "1") === "1";
+      var modes = { free: ["chat", "As typed"], say: ["quote", "Say it"], act: ["hand", "Do it"], think: ["thought", "Think it"] };
+      var mode = modes[pref("rpMode", "free")] ? pref("rpMode", "free") : "free";
+      var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      view.innerHTML = '<div class="chat-layout rp' + (panelOpen ? " panel-open" : "") + '">' + side +
+        '<section class="chat rp-chat"' + (c.avatar ? ' style="--rp-bg:url(\'' + esc(c.avatar) + '\')"' : "") + ">" +
+        '<div class="chat-head rp-head"><button type="button" class="icon-btn side-toggle" id="sideBtn" title="Chats and storylines">' + ic("panel") + "</button>" +
+        '<div class="rp-who-mini">' + avatar(c) + "<div><b>" + esc(c.name) + "</b><p>" +
         (conv.storyline ? esc(conv.storyline.title) : esc(c.tagline)) +
-        (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div>" +
-        '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">🕒 <span id="clockNow"></span></button>' +
-        '<button class="btn small" id="voiceBtn" title="Read aloud">🔊</button>' +
-        '<button class="btn small" id="memBtn" title="What ' + esc(c.name) + ' remembers">Memory</button>' +
-        '<button class="btn small" id="newScene" title="A new scene in this storyline, starting at its current time">New scene</button>' +
-        '<button class="btn small ghost" id="delConv" title="Delete this scene">🗑</button></div>' +
+        (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div></div>" +
+        '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">' + ic("clock") + ' <span id="clockNow"></span></button>' +
+        '<span class="grow"></span>' +
+        '<button type="button" class="icon-btn" id="voiceBtn" title="Read aloud settings">' + ic("speaker") + "</button>" +
+        '<button type="button" class="icon-btn" id="memBtn" title="What ' + esc(c.name) + ' remembers">' + ic("book") + "</button>" +
+        '<button type="button" class="icon-btn" id="delConv" title="Delete this scene">' + ic("trash") + "</button>" +
+        '<button type="button" class="icon-btn" id="panelBtn" title="' + esc(c.name) + '\'s panel">' + ic("panelr") + "</button></div>" +
         '<div class="memory-panel" id="memPanel" hidden></div>' +
         '<div class="voice-panel" id="voicePanel" hidden>' +
         '<label class="check-line"><input type="checkbox" id="autoRead"> Read ' + esc(c.name) + "'s replies aloud as they arrive</label>" +
@@ -1145,54 +1229,228 @@
         '<div id="sceneRules"></div><button type="button" class="btn small" id="srAdd">+ Add rule</button> ' +
         '<button type="button" class="btn small" id="srSave">Save scene rules</button></div></form>' +
         '<div class="messages" id="msgs"></div>' +
-        '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Reply with &quot;words&quot;, *actions* and `thoughts`. Add [Time: 45 min] to set how long it takes."></textarea>' +
-        '<button class="btn primary" id="sendBtn">Send</button></form>' +
+        '<form class="composer rp-composer" id="composer"><textarea id="input" rows="1" placeholder="Send a message" aria-label="Your message"></textarea>' +
+        '<div class="rp-bar"><div class="rp-pop"><button type="button" class="rp-mode" id="modeBtn" title="How your message is sent">' +
+          '<span id="modeIc">' + ic(modes[mode][0]) + '</span><span id="modeLbl">' + modes[mode][1] + "</span>" + ic("down") + "</button>" +
+          '<div class="rp-menu up" id="modeMenu" hidden>' + Object.keys(modes).map(function (k) {
+            return '<button type="button" data-mode="' + k + '">' + ic(modes[k][0]) + " " + modes[k][1] +
+              '<small>' + { free: "words, *actions* and `thoughts` as you write them", say: "sent as \"spoken words\"", act: "sent as an *action*", think: "sent as a `private thought`" }[k] + "</small></button>";
+          }).join("") + "</div></div>" +
+        '<button type="button" class="round light" id="picBtn" title="Picture this moment">' + ic("image") + "</button>" +
+        '<span class="grow"></span>' +
+        '<button type="button" class="icon-btn" id="wandBtn" title="Write my reply, or polish what I typed">' + ic("wand") + "</button>" +
+        (Rec ? '<button type="button" class="icon-btn" id="micBtn" title="Speak your message">' + ic("mic") + "</button>" : "") +
+        '<button class="round send" id="sendBtn" title="Send">' + ic("send") + "</button></div></form>" +
         '<p class="notice rp-legend"><span class="rp-speech">"Words"</span><em class="rp-action">actions</em><span class="rp-thought">thoughts</span>' +
         "<span>" + esc(c.name) + " is an AI character. Every character is a fictional adult.</span></p>" +
-        "</section></div>";
+        "</section>" +
+        '<aside class="rp-panel" id="rpPanel"><div class="rp-gallery"><div class="rp-photo" id="rpPhoto"></div>' +
+          '<button type="button" class="icon-btn rp-close" id="panelClose" title="Close">' + ic("x") + "</button>" +
+          '<button type="button" class="round dim rp-prev" id="phPrev" title="Previous">' + ic("left") + "</button>" +
+          '<button type="button" class="round dim rp-next" id="phNext" title="Next">' + ic("right") + "</button>" +
+          '<span class="rp-count" id="phCount"></span></div>' +
+          '<div class="rp-thumbs" id="phThumbs"></div>' +
+          '<div class="rp-who"><h3>' + esc(c.name) + " <small>" + esc(c.age) + "</small></h3>" +
+          '<button type="button" class="round light" id="callBtn" title="Call ' + esc(c.name) + ': talk out loud, hear the replies">' + ic("phone") + "</button>" +
+          '<div class="rp-pop"><button type="button" class="icon-btn" id="whoMore" title="More">' + ic("more") + "</button>" +
+          '<div class="rp-menu right" id="whoMenu" hidden><a href="#/character/' + c.id + '">' + ic("edit") + " Edit " + esc(c.name) + "</a>" +
+          '<button type="button" data-act="memory">' + ic("book") + " Memory</button>" +
+          '<button type="button" data-act="book">' + ic("edit") + " Turn into a manuscript</button>" +
+          '<button type="button" data-act="delete">' + ic("trash") + " Delete this scene</button></div></div></div>" +
+          '<p class="rp-blurb" id="blurb"></p>' +
+          '<div class="rp-actions"><button type="button" class="btn" id="newScene" title="A new scene, starting at this storyline\'s current time">' + ic("chatplus") + " New session</button>" +
+          '<button type="button" class="btn light" id="mediaBtn">' + ic("media") + " View media</button>" +
+          '<button type="button" class="btn ghost wide" id="bookBtn">' + ic("book") + " Turn into a manuscript</button></div></aside></div>";
       wireSidebar();
-      document.getElementById("sideBtn").onclick = function () { view.querySelector(".chat-layout").classList.toggle("show-side"); };
+      var layout = view.querySelector(".chat-layout");
+      document.getElementById("sideBtn").onclick = function () { layout.classList.toggle("show-side"); };
+      function setPanel(open) {
+        panelOpen = open; layout.classList.toggle("panel-open", open);
+        if (window.matchMedia("(min-width: 1280px)").matches) setPref("rpPanel", open ? "1" : "0");
+      }
+      document.getElementById("panelBtn").onclick = function () { setPanel(!panelOpen); };
+      document.getElementById("panelClose").onclick = function () { setPanel(false); };
 
       var msgs = document.getElementById("msgs");
       var input = document.getElementById("input");
       var sendBtn = document.getElementById("sendBtn");
       var list = conv.messages.slice();
+      var voice = null;  // the voice note being played: { i, state: "loading" | "playing" | "paused" | "done" }
+      var photoAt = 0;
+
+      // Right panel: the character's portrait and this scene's pictures, a short blurb, and actions.
+      function photos() {
+        return (c.avatar ? [c.avatar] : []).concat(list.filter(function (m) { return m.image; }).map(function (m) { return m.image; }));
+      }
+      function drawPanel() {
+        var ph = photos();
+        if (photoAt >= ph.length) photoAt = Math.max(0, ph.length - 1);
+        var box = document.getElementById("rpPhoto");
+        box.style.backgroundImage = ph.length ? "url('" + ph[photoAt].replace(/'/g, "%27") + "')" : "";
+        box.classList.toggle("none", !ph.length);
+        box.innerHTML = ph.length ? "" : '<span class="rp-initial">' + esc(c.name.charAt(0)) + '</span><a class="btn small light" href="#/character/' + c.id + '">Make a portrait</a>';
+        document.getElementById("phCount").textContent = ph.length > 1 ? (photoAt + 1) + " / " + ph.length : "";
+        document.getElementById("phPrev").hidden = document.getElementById("phNext").hidden = ph.length < 2;
+        document.getElementById("phThumbs").innerHTML = ph.length > 1 ? ph.map(function (u, i) {
+          return '<button type="button" data-ph="' + i + '" class="' + (i === photoAt ? "on" : "") + '" style="background-image:url(\'' + esc(u) + '\')" title="Picture ' + (i + 1) + '"></button>';
+        }).join("") : "";
+        var text = conv.situation || (conv.location ? "Starts at " + conv.location + "." : "") ||
+          (conv.storyline && conv.storyline.premise) || c.tagline || "";
+        var blurb = document.getElementById("blurb");
+        blurb.innerHTML = esc(text) + (text.length > 140 ? ' <button type="button" class="link" id="seeMore">See more</button>' : "");
+        blurb.classList.toggle("clamp", text.length > 140);
+      }
+      document.getElementById("phPrev").onclick = function () { var n = photos().length; photoAt = (photoAt - 1 + n) % n; drawPanel(); };
+      document.getElementById("phNext").onclick = function () { photoAt = (photoAt + 1) % photos().length; drawPanel(); };
+      document.getElementById("phThumbs").onclick = function (e) { var b = e.target.closest("[data-ph]"); if (b) { photoAt = +b.dataset.ph; drawPanel(); } };
+      document.getElementById("blurb").onclick = function (e) {
+        if (e.target.id !== "seeMore") return;
+        var open = this.classList.toggle("clamp");
+        e.target.textContent = open ? "See more" : "See less";
+      };
+      document.getElementById("rpPhoto").onclick = function (e) { if (!e.target.closest("a") && photos().length) showMedia(photoAt); };
+      document.getElementById("mediaBtn").onclick = function () { showMedia(-1); };
+      function showMedia(at) {
+        var ph = photos();
+        if (!ph.length) { toast("No pictures yet. Use the picture button under a message to make one."); return; }
+        var dlg = document.createElement("dialog");
+        dlg.className = "start-dlg media-dlg";
+        dlg.innerHTML = '<div class="start-head"><h2>' + esc(c.name) + '</h2><button type="button" class="x" title="Close">×</button></div>' +
+          (at >= 0 ? '<img class="media-big" src="' + esc(ph[at]) + '" alt="">' : "") +
+          '<div class="media-grid">' + ph.map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img src="' + esc(u) + '" alt="" loading="lazy"></a>'; }).join("") + "</div>";
+        document.body.appendChild(dlg);
+        dlg.querySelector(".x").onclick = function () { dlg.close(); };
+        dlg.onclose = function () { dlg.remove(); };
+        dlg.onclick = function (e) { if (e.target === dlg) dlg.close(); };
+        dlg.showModal();
+      }
+      var whoMenu = document.getElementById("whoMenu");
+      document.getElementById("whoMore").onclick = function (e) { e.stopPropagation(); whoMenu.hidden = !whoMenu.hidden; };
+      whoMenu.onclick = function (e) {
+        var b = e.target.closest("[data-act]");
+        if (!b) return;
+        whoMenu.hidden = true;
+        if (b.dataset.act === "memory") document.getElementById("memBtn").click();
+        if (b.dataset.act === "delete") document.getElementById("delConv").click();
+        if (b.dataset.act === "book") toManuscript();
+      };
+      document.getElementById("bookBtn").onclick = function () { toManuscript(); };
+      // Roleplay to book: the scene (or its storyline) is rewritten as chapters of a novel.
+      function toManuscript() {
+        var dlg = document.createElement("dialog");
+        dlg.className = "start-dlg book-dlg";
+        dlg.innerHTML = '<form method="dialog" class="start-form form">' +
+          '<div class="start-head"><h2><img class="brand-mark" src="/static/dreamnet/brand/mark-dark.svg" alt=""> Turn into a manuscript</h2><button type="button" class="x" data-close title="Close">×</button></div>' +
+          '<p class="hint">The AI rewrites the roleplay as novel chapters: every event and key line kept, in book prose with no asterisks or tags. You can edit every chapter after, and export it from the novel.</p>' +
+          (conv.storyline ? '<div class="start-first"><span class="lbl-strong">Write</span><div class="seg" role="radiogroup" aria-label="What to write">' +
+            '<label><input type="radio" name="scope" value="scene" checked> This scene</label>' +
+            '<label><input type="radio" name="scope" value="storyline"> The whole storyline</label></div></div>' : "") +
+          '<label>Into<select name="novel"><option value="">A new novel</option></select></label>' +
+          '<label class="new-only">Title<input name="title" maxlength="120" placeholder="' + esc(conv.storyline ? conv.storyline.title : c.name + " and " + state.me.username) + '"></label>' +
+          '<div class="two"><label>Your character\'s name in the book<input name="you" maxlength="60" value="' + esc(state.me.username) + '"></label>' +
+          '<label class="new-only">Point of view<select name="pov"><option>first person, present tense</option><option>first person, past tense</option>' +
+            "<option>third person, past tense</option><option>third person, present tense</option></select></label></div>" +
+          '<div class="book-progress" hidden><div class="bar"><span></span></div><p class="hint" id="bookNote"></p></div>' +
+          '<div class="row start-actions"><a class="btn ghost" id="bookOpen" hidden>Open the manuscript</a><button type="submit" class="btn primary" data-go>Write the manuscript</button></div></form>';
+        document.body.appendChild(dlg);
+        var f = dlg.querySelector("form"), timer = null;
+        api("/app/api/novels").then(function (ns) {
+          f.novel.innerHTML += ns.map(function (n) { return '<option value="' + n.id + '">Add chapters to “' + esc(n.title) + "”</option>"; }).join("");
+          if (conv.novel) f.novel.value = conv.novel.id;
+          f.novel.onchange();
+        }).catch(function () {});
+        f.novel.onchange = function () { dlg.querySelectorAll(".new-only").forEach(function (x) { x.hidden = !!f.novel.value; }); };
+        dlg.querySelector("[data-close]").onclick = function () { dlg.close(); };
+        dlg.onclose = function () { clearInterval(timer); dlg.remove(); };
+        f.onsubmit = function (e) {
+          e.preventDefault();
+          var go = f.querySelector("[data-go]"); go.disabled = true;
+          api("/app/api/conversations/" + convId + "/manuscript", { method: "POST", body: {
+            scope: f.scope ? f.scope.value : "scene", novel_id: f.novel.value ? +f.novel.value : null,
+            title: f.title.value.trim(), you: f.you.value.trim(), pov: f.pov.value } })
+            .then(function (r) {
+              var prog = dlg.querySelector(".book-progress"), bar = prog.querySelector(".bar span"), note = dlg.querySelector("#bookNote");
+              var open = dlg.querySelector("#bookOpen");
+              prog.hidden = false; open.hidden = false; open.href = "#/novel/" + r.novel_id; go.hidden = true;
+              open.onclick = function () { dlg.close(); };
+              function poll() {
+                api("/app/api/novels/" + r.novel_id + "/manuscript").then(function (j) {
+                  var total = j.total || r.chapters;
+                  bar.style.width = Math.round(100 * (j.done || 0) / total) + "%";
+                  note.textContent = j.error ? j.error : j.running ? "Writing chapter " + Math.min(j.done + 1, total) + " of " + total + "… You can open it now; chapters appear as they're written."
+                    : "Done: " + total + " chapter" + (total === 1 ? "" : "s") + " written.";
+                  if (!j.running) { clearInterval(timer); open.classList.remove("ghost"); open.classList.add("primary"); }
+                });
+              }
+              poll(); timer = setInterval(poll, 2500);
+            })
+            .catch(function (err) { go.disabled = false; toast(err.message, true); });
+        };
+        dlg.showModal();
+      }
 
       function currentClock() {
         for (var j = list.length - 1; j >= 0; j--) if (list[j].story_at) return list[j].story_at;
         return conv.clock;
       }
+      function voicePill(i) {
+        var st = voice && voice.i === i ? voice : null;
+        if (!st) return "";
+        var bars = "";
+        for (var k = 0; k < 22; k++) bars += '<i style="--h:' + (30 + Math.round(70 * Math.abs(Math.sin(k * 1.7 + i)))) + '%"></i>';
+        return '<div class="rp-voice ' + st.state + '"><button type="button" class="round" data-vplay="' + i + '" title="' +
+          (st.state === "playing" ? "Pause" : "Play") + '">' + ic(st.state === "playing" ? "pause" : st.state === "loading" ? "dots" : "play") + "</button>" +
+          '<span class="bars">' + bars + '</span><time id="vTime">' + (st.state === "loading" ? "…" : fmtSecs(st.left)) + "</time></div>";
+      }
       function render(keepScroll) {
         var lastDay = "", top = msgs.scrollTop;
         var start = conv.start || currentClock();
         var sk = sky(currentClock());
+        var lastReal = -1;
+        list.forEach(function (m, j) { if (m.role !== "mark") lastReal = j; });
         document.getElementById("clockNow").textContent = storyClock(currentClock(), start, true) + " · " + sk.part + " · " + sk.icon;
         document.getElementById("clockBtn").title = "In-story time. " + sk.part + ", " + sk.moon.toLowerCase() + ". Set the clock or skip ahead.";
         msgs.innerHTML = list.map(function (m, i) {
-          var isLast = i === list.length - 1;
+          var isLast = i === lastReal;
           var ts = m.created_at || Date.now() / 1000;
           var day = dayLabel(ts), head = "";
           if (day !== lastDay) { head = '<div class="day-mark"><span>' + esc(day) + "</span></div>"; lastDay = day; }
           if (m.role === "mark") {
-            return head + '<div class="story-mark"><span>⏱ ' + esc(m.content) + (m.story_at ? " · " + esc(storyClock(m.story_at, start, true)) : "") +
-              '</span><time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + '</time><button data-delmark="' + m.id + '" title="Remove this time mark">×</button></div>';
+            return head + '<div class="story-mark">' + ic(/^Starts at|^Scenario/.test(m.content) ? "pin" : "clock") + "<span>" + esc(m.content) + (m.story_at ? " · " + esc(storyClock(m.story_at, start, true)) : "") +
+              '</span><time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + '</time><button data-delmark="' + m.id + '" title="Remove this mark">×</button></div>';
           }
-          return head + '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
-            '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
-            (m.role === "assistant" && m.story_at ? '<button type="button" class="now" data-settime="' + m.id + '" title="Change this time">' + esc(nowLine(m.story_at, start)) + "</button>" : "") + "</div>" +
+          var me = m.role === "assistant";
+          var body = m.editing
+            ? '<div class="rp-edit"><textarea data-editbox="' + i + '" rows="6">' + esc(m.content) + "</textarea>" +
+              '<div class="row"><button type="button" class="btn small primary" data-editsave="' + i + '">Save</button>' +
+              '<button type="button" class="btn small ghost" data-editcancel="' + i + '">Cancel</button></div></div>'
+            : '<div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
+              (me && m.story_at && !m.typing ? '<button type="button" class="now" data-settime="' + m.id + '" title="Change this time">' + esc(nowLine(m.story_at, start)) + "</button>" : "") + "</div>";
+          var more = m.id && !m.typing ? '<div class="rp-pop"><button type="button" data-more="' + i + '" title="More">' + ic("more") + "</button>" +
+            '<div class="rp-menu" data-menu="' + i + '" hidden>' +
+            (!m.image && !m.picturing ? '<button type="button" data-picture="' + i + '">' + ic("image") + " Picture this moment</button>" : "") +
+            (me && m.story_at ? '<button type="button" data-settime="' + m.id + '">' + ic("clock") + " Change the time</button>" : "") +
+            (conv.novel && me ? '<button type="button" data-tochapter="' + i + '">' + ic("plus") + " Add to chapter</button>" : "") +
+            (i > 0 ? '<button type="button" data-rewind="' + m.id + '">' + ic("rewind") + " Rewind to here</button>" : "") + "</div></div>" : "";
+          return head + '<div class="msg ' + m.role + '">' +
+            '<div class="bubble-wrap"><div class="rp-line">' + body +
+            (me && m.id && !m.typing && !m.editing ? '<button type="button" class="round dim rp-speak" data-listen="' + i + '" title="Read aloud">' + ic("speaker") + "</button>" : "") + "</div>" +
             (m.picturing ? '<div class="scene-pic busy"><span><img class="brand-mark" src="/static/dreamnet/brand/mark-dark.svg" alt=""> Picturing this moment…</span></div>' :
               m.image ? '<figure class="scene-pic"><a href="' + esc(m.image) + '" target="_blank" rel="noopener" title="Open full size"><img src="' + esc(m.image) + '" alt="Picture of this moment" loading="lazy"></a>' +
-                '<figcaption><button data-picture="' + i + '">↻ New picture</button><button data-picprompt="' + i + '">✎ Edit prompt</button><button data-picdel="' + i + '">× Remove</button></figcaption></figure>' : "") +
-            (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
-              '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time>" +
-              (m.role === "assistant" ? '<button data-listen="' + i + '">🔊 Listen</button>' : "") +
-              (!m.image && !m.picturing ? '<button data-picture="' + i + '" title="Make a picture of this moment">🖼 Picture</button>' : "") +
-              (m.role === "assistant" && isLast && i > 0 ? '<button data-regen="' + m.id + '">↻ Regenerate</button>' : "") +
-              (conv.novel && m.role === "assistant" ? '<button data-tochapter="' + i + '">＋ Add to chapter</button>' : "") +
-              (i > 0 ? '<button data-rewind="' + m.id + '">Rewind to here</button>' : "") + "</div>" : "") +
+                '<figcaption><button data-picture="' + i + '">' + ic("refresh") + ' New picture</button><button data-picprompt="' + i + '">' + ic("edit") + ' Edit prompt</button><button data-picdel="' + i + '">' + ic("x") + " Remove</button></figcaption></figure>" : "") +
+            (m.id && !m.typing && !m.editing ? '<div class="msg-tools">' +
+              '<button type="button" data-copy="' + i + '" title="Copy">' + ic("copy") + "</button>" +
+              '<button type="button" data-edit="' + i + '" title="Edit">' + ic("edit") + "</button>" +
+              (me && isLast && i > 0 ? '<button type="button" data-regen="' + m.id + '" title="Regenerate">' + ic("refresh") + "</button>" +
+                '<button type="button" data-continue="' + i + '" title="Continue this reply">' + ic("skip") + "</button>" : "") +
+              more +
+              (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
+              '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time></div>" : "") +
+            voicePill(i) +
             "</div></div>";
         }).join("");
         msgs.scrollTop = keepScroll ? top : msgs.scrollHeight;
+        drawPanel();
       }
       render();
       // The user opened the scene from the place picker: get the character's reply to it now.
@@ -1204,59 +1462,202 @@
       function makePicture(m, promptText) {
         m.picturing = true; render(true);
         api("/app/api/messages/" + m.id + "/picture", { method: "POST", body: promptText ? { prompt: promptText } : {} })
-          .then(function (r) { m.image = r.image; m.image_prompt = r.prompt; })
+          .then(function (r) { m.image = r.image; m.image_prompt = r.prompt; photoAt = photos().indexOf(r.image); })
           .catch(function (err) { toast(err.message, true); })
           .finally(function () { m.picturing = false; render(true); });
       }
 
-      function send(text) {
+      // Voice notes: a reply read aloud plays in a small player under it.
+      var vTick = null;
+      function voiceTick() {
+        clearInterval(vTick);
+        vTick = setInterval(function () {
+          if (!voice || !document.body.contains(msgs)) { clearInterval(vTick); return; }
+          var t = document.getElementById("vTime");
+          if (player && voice.audio === player && t && isFinite(player.duration)) {
+            voice.left = Math.max(0, player.duration - player.currentTime);
+            t.textContent = fmtSecs(voice.left);
+          }
+        }, 250);
+      }
+      function playVoice(i, onEnd) {
+        stopSpeaking();
+        voice = { i: i, state: "loading", left: 0 };
+        var mine = voice;
+        render(true);
+        speak(list[i].content, voiceFor(c), function () {
+          if (voice === mine) { mine.state = "done"; mine.left = mine.audio && isFinite(mine.audio.duration) ? mine.audio.duration : 0; render(true); }
+          if (onEnd) onEnd();
+        }).then(function () {
+          if (voice !== mine || mine.state !== "loading") return;
+          mine.audio = player; mine.state = "playing";
+          mine.left = player && isFinite(player.duration) ? player.duration : 0;
+          render(true); voiceTick();
+        });
+      }
+      voiceHook = function () { if (voice && voice.state !== "done" && voice.state !== "loading") { voice.state = "done"; if (document.body.contains(msgs)) render(true); } };
+
+      function send(text, opts) {
+        opts = opts || {};
         sendBtn.disabled = true;
         if (text) list.push({ role: "user", content: text, created_at: Date.now() / 1000 });
-        var pending = { role: "assistant", content: "", typing: true };
-        list.push(pending);
+        var target = opts.cont ? list[opts.cont] : { role: "assistant", content: "", typing: true };
+        var base = opts.cont ? target.content.replace(/\s+$/, "") + "\n\n" : "";
+        if (opts.cont) target.typing = true; else list.push(target);
         render();
         ctrl = new AbortController();
-        stream("/app/api/conversations/" + convId + "/messages", { content: text }, function (t) {
-          pending.content = t; render();
+        stream("/app/api/conversations/" + convId + "/messages", opts.cont ? { content: "", continue: true } : { content: text }, function (t) {
+          target.content = base + t; render();
         }, ctrl.signal).then(function () {
           return api("/app/api/conversations/" + convId);
         }).then(function (fresh) {
           list = fresh.messages; render();
-          var last = list[list.length - 1];
-          if (pref("autoRead", "0") === "1" && last && last.role === "assistant") speak(last.content, voiceFor(c));
+          var last = list.length - 1;
+          if (list[last] && list[last].role === "assistant" && (calling || pref("autoRead", "0") === "1"))
+            playVoice(last, function () { if (calling) listen(true); });
         }).catch(function (e) {
           if (e.name === "AbortError") return;
-          list.pop(); render(); toast(e.message, true);
+          if (opts.cont) { target.typing = false; target.content = base.replace(/\s+$/, ""); } else list.pop();
+          render(); toast(e.message, true);
         }).finally(function () { sendBtn.disabled = false; ctrl = null; });
+      }
+      function wrap(text) {
+        if (mode === "say" && !/^["“]/.test(text)) return '"' + text + '"';
+        if (mode === "act" && !/^\*/.test(text)) return "*" + text + "*";
+        if (mode === "think" && !/^`/.test(text)) return "`" + text + "`";
+        return text;
       }
 
       document.getElementById("composer").onsubmit = function (e) {
         e.preventDefault();
         var text = input.value.trim();
         if (!text || sendBtn.disabled) return;
-        input.value = "";
-        send(text);
+        input.value = ""; input.style.height = "";
+        send(wrap(text));
       };
       input.onkeydown = function (e) {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("composer").requestSubmit(); }
       };
+      input.oninput = function () { input.style.height = ""; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
+      var modeMenu = document.getElementById("modeMenu");
+      document.getElementById("modeBtn").onclick = function (e) { e.stopPropagation(); modeMenu.hidden = !modeMenu.hidden; };
+      modeMenu.onclick = function (e) {
+        var b = e.target.closest("[data-mode]");
+        if (!b) return;
+        mode = b.dataset.mode; setPref("rpMode", mode); modeMenu.hidden = true;
+        document.getElementById("modeIc").innerHTML = ic(modes[mode][0]);
+        document.getElementById("modeLbl").textContent = modes[mode][1];
+        input.focus();
+      };
+      document.getElementById("picBtn").onclick = function () {
+        for (var j = list.length - 1; j >= 0; j--) if (list[j].role !== "mark" && list[j].id) { makePicture(list[j]); return; }
+        toast("Say something first, then picture the moment.", true);
+      };
+      var wand = document.getElementById("wandBtn");
+      wand.onclick = function () {
+        if (wand.classList.contains("busy")) return;
+        wand.classList.add("busy");
+        api("/app/api/conversations/" + convId + "/suggest", { method: "POST", body: { draft: input.value.trim() } })
+          .then(function (r) { input.value = r.text; input.oninput(); input.focus(); })
+          .catch(function (err) { toast(err.message, true); })
+          .finally(function () { wand.classList.remove("busy"); });
+      };
+      // Speaking your message (where the browser can listen), and calls: talk, hear the reply, talk again.
+      var rec = null, calling = false, micBtn = document.getElementById("micBtn"), callBtn = document.getElementById("callBtn");
+      function listen(forCall) {
+        if (!Rec) return;
+        if (rec) { rec.abort(); rec = null; }
+        stopSpeaking();
+        var r = new Rec(), before = forCall ? "" : input.value.replace(/\s*$/, " ").replace(/^ $/, ""), said = "";
+        r.lang = "en-US"; r.interimResults = true; r.continuous = false;
+        r.onresult = function (e) {
+          said = [].map.call(e.results, function (x) { return x[0].transcript; }).join(" ");
+          input.value = (before + said).trim(); input.oninput();
+        };
+        r.onend = function () {
+          if (rec === r) rec = null;
+          if (micBtn) micBtn.classList.remove("on");
+          if (forCall && calling) {
+            if (said.trim()) document.getElementById("composer").requestSubmit();
+            else setTimeout(function () { if (calling && !rec) listen(true); }, 300);
+          }
+        };
+        r.onerror = function (e) {
+          if (e.error === "not-allowed") { toast("Allow the microphone to talk to " + c.name + ".", true); endCall(); }
+        };
+        rec = r;
+        if (micBtn) micBtn.classList.add("on");
+        try { r.start(); } catch (err) { rec = null; }
+      }
+      function endCall() {
+        calling = false; callBtn.classList.remove("on"); callBtn.title = "Call " + c.name + ": talk out loud, hear the replies";
+        if (rec) { rec.abort(); rec = null; }
+      }
+      if (micBtn) micBtn.onclick = function () { if (rec) { rec.stop(); } else listen(false); };
+      callBtn.onclick = function () {
+        if (calling) { endCall(); stopSpeaking(); toast("Call ended"); return; }
+        if (!Rec) {
+          var on = pref("autoRead", "0") !== "1";
+          setPref("autoRead", on ? "1" : "0"); autoRead.checked = on;
+          document.getElementById("voiceBtn").classList.toggle("on", on);
+          toast(on ? "This browser can't listen, so type as usual: " + c.name + "'s replies will be read aloud." : "Replies won't be read aloud.");
+          return;
+        }
+        calling = true; callBtn.classList.add("on"); callBtn.title = "End the call";
+        toast("On a call with " + c.name + ". Talk, then pause; they answer out loud.");
+        listen(true);
+      };
+      var oldCleanup = cleanup;
+      cleanup = function () { oldCleanup(); endCall(); voiceHook = null; clearInterval(vTick); };
+      document.addEventListener("click", function closeMenus(e) {
+        if (!document.body.contains(msgs)) { document.removeEventListener("click", closeMenus); return; }
+        if (!e.target.closest(".rp-pop")) view.querySelectorAll(".rp-menu").forEach(function (m) { m.hidden = true; });
+      });
+
       msgs.onclick = function (e) {
         var b = e.target.closest("button");
         if (!b) return;
+        if (b.dataset.more) {
+          e.stopPropagation();
+          var mn = msgs.querySelector('[data-menu="' + b.dataset.more + '"]'), was = mn.hidden;
+          view.querySelectorAll(".rp-menu").forEach(function (x) { x.hidden = true; });
+          mn.hidden = !was;
+          return;
+        }
+        var menu = b.closest(".rp-menu");
+        if (menu) menu.hidden = true;
         if (b.dataset.regen) {
           api("/app/api/messages/" + b.dataset.regen, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id < +b.dataset.regen; }); render(); send("");
           });
+        } else if (b.dataset.continue) {
+          if (!sendBtn.disabled) send("", { cont: +b.dataset.continue });
+        } else if (b.dataset.copy) {
+          var txt = stripTimeTags(list[+b.dataset.copy].content);
+          (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () { toast("Copied"); },
+            function () { toast("Couldn't copy here. Select the text instead.", true); });
+        } else if (b.dataset.edit) {
+          list.forEach(function (m) { m.editing = false; });
+          list[+b.dataset.edit].editing = true; render(true);
+          var box = msgs.querySelector("[data-editbox]"); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+        } else if (b.dataset.editcancel) {
+          list[+b.dataset.editcancel].editing = false; render(true);
+        } else if (b.dataset.editsave) {
+          var em = list[+b.dataset.editsave], val = msgs.querySelector("[data-editbox]").value.trim();
+          api("/app/api/messages/" + em.id, { method: "PUT", body: { content: val } })
+            .then(function (r) { em.content = r.content; em.editing = false; render(true); })
+            .catch(function (err) { toast(err.message, true); });
         } else if (b.dataset.rewind) {
           if (!confirm("Delete this message and everything after it?")) return;
           api("/app/api/messages/" + b.dataset.rewind, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id < +b.dataset.rewind; }); render();
           });
-        } else if (b.dataset.listen) {
-          if (b.classList.contains("playing")) { stopSpeaking(); return; }
-          var idx = +b.dataset.listen;
-          speak(list[idx].content, voiceFor(c), function () { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
-          b.classList.add("playing"); b.textContent = "■ Stop";
+        } else if (b.dataset.listen || b.dataset.vplay) {
+          var idx = +(b.dataset.listen || b.dataset.vplay);
+          if (voice && voice.i === idx && voice.state === "playing" && player) { player.pause(); if (player.echo) player.echo.pause(); voice.state = "paused"; render(true); }
+          else if (voice && voice.i === idx && voice.state === "paused" && player) { player.play(); voice.state = "playing"; render(true); voiceTick(); }
+          else if (voice && voice.i === idx && voice.state === "playing") { stopSpeaking(); }
+          else if (!(voice && voice.i === idx && voice.state === "loading")) playVoice(idx);
         } else if (b.dataset.settime) {
           var v = prompt("When does this reply end? Type a time (03:15 AM) or how long it took (45 min, 2 hours). Later messages move with it.");
           if (!v || !v.trim()) return;
