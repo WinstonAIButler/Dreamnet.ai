@@ -441,3 +441,24 @@ a.card.new { text-decoration: none; }
 .voice-panel select { background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; font: inherit; }
 #voiceBtn.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .msg-tools button.playing { color: var(--accent); opacity: 1; }
+
+/* Character profile and AI fill */
+.ai-box { border: 1px solid var(--accent); border-radius: 16px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+  background: linear-gradient(135deg, rgba(241,145,109,.08), rgba(174,125,172,.10)); }
+.ai-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.ai-one { background: none; border: 0; cursor: pointer; font-size: 14px; padding: 0 4px; opacity: .75; }
+.ai-one:hover { opacity: 1; }
+.ai-one.busy { animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+.profile-box { display: flex; flex-direction: column; gap: 8px; }
+.profile-box h3 { margin: 6px 0 0; font-family: var(--serif); font-size: 22px; font-weight: 600; }
+.profile-box h3 .hint { display: block; font-family: Inter, system-ui, sans-serif; font-size: 12px; margin-top: 2px; }
+.profile-box details { border: 1px solid var(--line); border-radius: 14px; padding: 6px 12px; background: var(--bg); }
+.profile-box summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.profile-box details[open] summary { margin-bottom: 6px; }
+.prow { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.prow-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.prow-head span { flex: 1; }
+.prow textarea { min-height: 0 !important; }
+.lock { background: var(--bg-2); border: 1px solid var(--line); color: var(--muted); border-radius: 999px; font-size: 12px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.lock.on { border-color: var(--accent); color: var(--accent); background: rgba(241,145,109,.1); }

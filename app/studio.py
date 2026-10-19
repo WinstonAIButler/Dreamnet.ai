@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
 import app.portraits as portraits
+import app.profile as profiles
 import app.voices as voices
 from app.auth import get_session_from_request
 from app.database import (
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS characters (
     tags TEXT NOT NULL DEFAULT '',
     avatar TEXT NOT NULL DEFAULT '',  -- portrait URL, empty = gradient with initial
     portrait_prompt TEXT NOT NULL DEFAULT '',
+    profile TEXT NOT NULL DEFAULT '{}',         -- detailed profile: {field: {"value", "secret"}}
     voice TEXT NOT NULL DEFAULT '',             -- read-aloud voice id, empty = default for gender
     voice_tone TEXT NOT NULL DEFAULT 'natural',
     voice_rate INTEGER NOT NULL DEFAULT 0,      -- speed, percent faster or slower
@@ -383,6 +385,8 @@ async def init_studio_db(db_path: str):
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(characters)")).fetchall()]
         if "portrait_prompt" not in cols:
             await db.execute("ALTER TABLE characters ADD COLUMN portrait_prompt TEXT NOT NULL DEFAULT ''")
+        if "profile" not in cols:
+            await db.execute("ALTER TABLE characters ADD COLUMN profile TEXT NOT NULL DEFAULT '{}'")
         if "voice" not in cols:
             await db.execute("ALTER TABLE characters ADD COLUMN voice TEXT NOT NULL DEFAULT ''")
             await db.execute("ALTER TABLE characters ADD COLUMN voice_tone TEXT NOT NULL DEFAULT 'natural'")
@@ -711,6 +715,7 @@ def _character_fields(body: dict) -> dict:
     f = {k: str(body.get(k) or "").strip()[:4000] for k in
          ("name", "gender", "tagline", "appearance", "persona", "greeting", "tags", "color", "avatar")}
     f["age"] = body.get("age")
+    f["profile"] = profiles.clean(body.get("profile"))
     f["voice"] = str(body.get("voice") or "")
     if f["voice"] and f["voice"] not in voices.VOICE_IDS and not f["voice"].startswith("device:"):
         f["voice"] = ""
@@ -749,7 +754,88 @@ async def characters(s: dict = Depends(_session)):
 @router.get("/characters/{cid}")
 async def character(cid: int, s: dict = Depends(_session)):
     c = await _row("SELECT * FROM characters WHERE id = ?", (cid,))
-    return JSONResponse(c) if c else _err(404, "Character not found")
+    if not c:
+        return _err(404, "Character not found")
+    return JSONResponse({**c, "profile": profiles.clean(c["profile"])})
+
+
+@router.get("/profile-fields")
+async def profile_fields(s: dict = Depends(_session)):
+    return JSONResponse([{"section": sec, "fields": [{"key": k, "label": l, "hint": h} for k, l, h in fields]}
+                         for sec, fields in profiles.SECTIONS])
+
+
+BASIC_FIELDS = ("name", "age", "gender", "tagline", "appearance", "persona", "greeting", "tags")
+
+
+@router.post("/characters/ai-fill")
+async def ai_fill(request: Request, s: dict = Depends(_session)):
+    """Fill in a character with the AI. scope: "all" rewrites everything, "empty" fills only
+    blank fields, or a single field key (basic or profile) rewrites just that one."""
+    body = await request.json()
+    cur = {k: str((body.get("character") or {}).get(k) or "").strip() for k in BASIC_FIELDS}
+    prof = profiles.clean(body.get("profile"))
+    idea = str(body.get("idea") or "").strip()[:1000]
+    scope = str(body.get("scope") or "empty")
+    if mentions_minor(idea, strict=True):
+        return _err(400, "Characters can't be described as minors or as childlike.")
+    if scope == "all":
+        want_basic, want_prof = list(BASIC_FIELDS), list(profiles.FIELDS)
+    elif scope == "empty":
+        want_basic = [k for k in BASIC_FIELDS if not cur[k]]
+        want_prof = [k for k in profiles.FIELDS if k not in prof]
+    elif scope in BASIC_FIELDS or scope in profiles.FIELDS:
+        want_basic = [scope] if scope in BASIC_FIELDS else []
+        want_prof = [scope] if scope in profiles.FIELDS else []
+    else:
+        return _err(400, "Unknown field.")
+    if not want_basic and not want_prof:
+        return JSONResponse({"character": {}, "profile": {}})
+    known = "\n".join(f"{k}: {v}" for k, v in cur.items() if v and k not in want_basic)
+    known += "".join(f"\n{profiles.FIELDS[k]}{' (secret)' if v['secret'] else ''}: {v['value']}"
+                     for k, v in prof.items() if k not in want_prof)
+    shape = ", ".join(f'"{k}": "..."' for k in want_basic if k != "age") + (', "age": 30' if "age" in want_basic else "")
+    prof_list = "\n".join(f"- {k}: {profiles.FIELDS[k]}" for k in want_prof)
+    messages = [
+        {"role": "system", "content":
+            "You design characters for a private, adults-only dark romance novel. Every character is an adult aged "
+            "18 or over, never childlike. " + LIFELIKE_RULES + " Be specific, vivid and consistent with everything "
+            "already known about the character; invent concrete names, places, brands and numbers rather than "
+            "staying vague. Reply with JSON only."},
+        {"role": "user", "content":
+            (f"Idea: {idea}\n\n" if idea else "")
+            + (f"Already decided (keep consistent):\n{known}\n\n" if known.strip() else "")
+            + "Return one JSON object" + (f" with {shape}" if shape else "")
+            + (f'{", and" if shape else " with"} "profile": an object whose keys are these field ids, each '
+               '{"value": "one to three sentences", "secret": true or false} (secret = true for things the '
+               "character hides from the person they're falling for):\n" + prof_list if want_prof else "")
+            + ('\n"persona" is personality and backstory in 3 to 5 sentences; "appearance" is 2 to 3 sentences of '
+               'lifelike physical detail; "greeting" is an in-character opening line using *actions*, "speech" and '
+               '`thoughts`; "tags" is 3 to 6 comma-separated tags; "gender" is male, female or non-binary.'
+               if want_basic else "")},
+    ]
+    try:
+        data = _parse_memory_json(await _complete(s["user_id"], messages, 0.85, 3000))
+    except Exception as e:
+        return _err(502, f"The AI didn't answer: {e}")
+    if not data:
+        return _err(502, "The AI's answer couldn't be read. Try again.")
+    out_basic = {}
+    for k in want_basic:
+        if k in data and str(data[k]).strip():
+            out_basic[k] = str(data[k]).strip()[:4000]
+    if "age" in out_basic:
+        try:
+            out_basic["age"] = max(18, int(float(out_basic["age"])))
+        except ValueError:
+            out_basic.pop("age")
+    if out_basic.get("gender") not in (None, "male", "female", "non-binary"):
+        out_basic.pop("gender")
+    out_prof = {k: v for k, v in profiles.clean(data.get("profile") or {}).items() if k in want_prof}
+    texts = [str(v) for v in out_basic.values()] + [v["value"] for v in out_prof.values()]
+    if any(mentions_minor(t, strict=True) for t in texts):
+        return _err(400, "That came back describing someone underage, so it was thrown away. Try again.")
+    return JSONResponse({"character": out_basic, "profile": out_prof})
 
 
 @router.post("/characters")
@@ -759,6 +845,8 @@ async def save_character(request: Request, s: dict = Depends(_session)):
     if not f["name"] or not f["persona"]:
         return _err(400, "Give the character a name and a personality.")
     problem = check_character(f)
+    if not problem and any(mentions_minor(v["value"], strict=True) for v in f["profile"].values()):
+        problem = "Characters can't be described as minors or as childlike."
     if problem:
         return _err(400, problem)
     greeting = f["greeting"] or f"*looks at you* So. You're finally here."
@@ -766,18 +854,18 @@ async def save_character(request: Request, s: dict = Depends(_session)):
     cid = body.get("id")
     if cid:
         await _exec("""UPDATE characters SET name=?, age=?, gender=?, tagline=?, appearance=?, persona=?,
-                       greeting=?, tags=?, color=?, avatar=?, voice=?, voice_tone=?, voice_rate=?, updated_at=?
+                       greeting=?, tags=?, color=?, avatar=?, voice=?, voice_tone=?, voice_rate=?, profile=?, updated_at=?
                        WHERE id=?""",
                     (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
                      f["persona"], greeting, f["tags"][:200], f["color"] or "#F1916D", f["avatar"],
-                     f["voice"], f["voice_tone"], f["voice_rate"], now, int(cid)))
+                     f["voice"], f["voice_tone"], f["voice_rate"], json.dumps(f["profile"]), now, int(cid)))
         return JSONResponse({"id": int(cid)})
     cid = await _exec("""INSERT INTO characters (name, age, gender, tagline, appearance, persona, greeting,
-                         tags, avatar, color, voice, voice_tone, voice_rate, created_at, updated_at)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         tags, avatar, color, voice, voice_tone, voice_rate, profile, created_at, updated_at)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
                        f["persona"], greeting, f["tags"][:200], f["avatar"], f["color"] or "#F1916D",
-                       f["voice"], f["voice_tone"], f["voice_rate"], now, now))
+                       f["voice"], f["voice_tone"], f["voice_rate"], json.dumps(f["profile"]), now, now))
     return JSONResponse({"id": cid})
 
 
@@ -831,7 +919,8 @@ async def make_portrait(cid: int, request: Request, s: dict = Depends(_session))
 async def _portrait_prompt(request: Request, s: dict, c: dict) -> str:
     """Ask the chat model to expand the character card into a Z-Image prompt."""
     card = (f"Name: {c['name']}\nAge: {c['age']}\nGender: {c['gender']}\nTagline: {c['tagline']}\n"
-            f"Appearance: {c['appearance']}\nPersonality: {c['persona']}")
+            f"Appearance: {c['appearance']} {profiles.looks(profiles.clean(c.get('profile')))}\n"
+            f"Personality: {c['persona']}")
     messages = [{"role": "system", "content": portraits.PROMPT_INSTRUCTIONS},
                 {"role": "user", "content": card}]
     try:
@@ -1318,7 +1407,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         "`She has no idea.` \"You should go.\" " + LIFELIKE_RULES + " Dark themes, tension "
         "and explicit adult content between consenting adult characters are allowed in this private story.\n\n"
         f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
-    )
+    ) + profiles.for_prompt(profiles.clean(c["profile"]), c["name"], s["username"])
     if cv["novel_id"]:
         novel, cast = await _novel_with_cast(cv["novel_id"])
         if novel:

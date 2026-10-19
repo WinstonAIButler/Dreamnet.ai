@@ -432,10 +432,11 @@
 
   function viewCharacterForm(id) {
     setNav("characters");
-    var load = id ? api("/app/api/characters/" + id) : Promise.resolve({
-      name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#F1916D", avatar: "",
-    });
-    load.then(function (c) {
+    var load = Promise.all([id ? api("/app/api/characters/" + id) : Promise.resolve({
+      name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#F1916D", avatar: "", profile: {},
+    }), api("/app/api/profile-fields")]);
+    load.then(function (r) {
+      var c = r[0], sections = r[1], prof = c.profile || {};
       view.innerHTML =
         '<div class="create">' +
         '<div class="preview"><div class="card" id="pv"></div></div>' +
@@ -446,12 +447,17 @@
         '<div class="two"><label>Gender<select name="gender">' + ["male", "female", "non-binary"].map(function (g) {
           return "<option" + (c.gender === g ? " selected" : "") + ">" + g + "</option>"; }).join("") + "</select></label>" +
         '<label>Colour<input name="color" type="color" value="' + esc(c.color) + '"></label></div>' +
-        '<label>Tagline<input name="tagline" maxlength="160" placeholder="Mafia heir who never asks twice" value="' + esc(c.tagline) + '"></label>' +
+        '<div class="ai-box"><div class="ai-head"><b>✨ Build with AI</b><span class="hint">or fill everything in yourself below; you can mix both</span></div>' +
+        '<textarea id="aiIdea" rows="2" placeholder="Your idea, e.g. a possessive vampire art dealer in Prague who collects debts in blood"></textarea>' +
+        '<div class="row"><button type="button" class="btn small primary" data-ai="empty">Fill empty fields</button>' +
+        '<button type="button" class="btn small" data-ai="all">Write everything from the idea</button><span class="hint" id="aiStatus"></span></div></div>' +
+        '<label><span class="lbl">Tagline ' + aiBtn("tagline") + '</span><input name="tagline" maxlength="160" placeholder="Mafia heir who never asks twice" value="' + esc(c.tagline) + '"></label>' +
         '<label>Traits <span class="hint">click to add to the personality</span><div class="choices">' +
         TRAITS.map(function (t) { return '<button type="button" class="chip" data-trait="' + t + '">' + t + "</button>"; }).join("") + "</div></label>" +
-        '<label>Personality and backstory<textarea name="persona" rows="5" required placeholder="Who they are, what they want, what they hide, how they talk.">' + esc(c.persona) + "</textarea></label>" +
-        '<label>Appearance<textarea name="appearance" rows="3" placeholder="Lifelike detail, even for supernatural characters: skin, hair, eyes, build, scars, clothes.">' + esc(c.appearance) + "</textarea></label>" +
-        '<label>Opening line <span class="hint">how they greet you in a new scene; use *asterisks* for actions</span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
+        '<label><span class="lbl">Personality and backstory ' + aiBtn("persona") + '</span><textarea name="persona" rows="5" required placeholder="Who they are, what they want, what they hide, how they talk.">' + esc(c.persona) + "</textarea></label>" +
+        '<label><span class="lbl">Appearance ' + aiBtn("appearance") + '</span><textarea name="appearance" rows="3" placeholder="Lifelike detail, even for supernatural characters: skin, hair, eyes, build, scars, clothes.">' + esc(c.appearance) + "</textarea></label>" +
+        profileSection(sections, prof) +
+        '<label><span class="lbl">Opening line ' + aiBtn("greeting") + ' <span class="hint">how they greet you in a new scene: &quot;words&quot;, *actions*, `thoughts`</span></span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
         '<div class="two"><label>Tags <span class="hint">comma separated</span><input name="tags" value="' + esc(c.tags) + '"></label>' +
         '<label>Portrait URL <span class="hint">optional, a photo-realistic image</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
         portraitSection(id, c) +
@@ -467,6 +473,34 @@
       }
       form.oninput = preview; preview();
       wireVoiceSection(form, c);
+      form.addEventListener("click", function (e) {
+        var lock = e.target.closest("[data-secret]");
+        if (lock) { setSecret(lock, lock.dataset.secret !== "1"); return; }
+        var b = e.target.closest("[data-ai]");
+        if (!b) return;
+        e.preventDefault();
+        var scope = b.dataset.ai, status = document.getElementById("aiStatus");
+        if (scope === "all" && !document.getElementById("aiIdea").value.trim() && !confirm("Rewrite every field from scratch? What you've written will be replaced.")) return;
+        var body = { character: {}, profile: collectProfile(form), idea: document.getElementById("aiIdea").value, scope: scope };
+        ["name", "age", "gender", "tagline", "appearance", "persona", "greeting", "tags"].forEach(function (k) { body.character[k] = form[k].value; });
+        if (scope === "all" || scope === "empty") status.textContent = "Writing the character…";
+        form.querySelectorAll("[data-ai]").forEach(function (x) { x.disabled = true; });
+        b.classList.add("busy");
+        api("/app/api/characters/ai-fill", { method: "POST", body: body }).then(function (res) {
+          Object.keys(res.character).forEach(function (k) { if (form[k]) form[k].value = res.character[k]; });
+          Object.keys(res.profile).forEach(function (k) {
+            var row = form.querySelector('[data-prow="' + k + '"]');
+            if (!row) return;
+            row.querySelector("textarea").value = res.profile[k].value;
+            setSecret(row.querySelector("[data-secret]"), res.profile[k].secret);
+            var sec = row.closest("details"); if (sec) sec.open = true;
+          });
+          var n = Object.keys(res.character).length + Object.keys(res.profile).length;
+          status.textContent = n ? "Filled " + n + " field" + (n === 1 ? "" : "s") + ". Edit anything, then save." : "Nothing was empty.";
+          preview();
+        }).catch(function (err) { status.textContent = err.message; toast(err.message, true); })
+          .finally(function () { form.querySelectorAll("[data-ai]").forEach(function (x) { x.disabled = false; }); b.classList.remove("busy"); });
+      });
       form.querySelectorAll("[data-trait]").forEach(function (b) {
         b.onclick = function () {
           var t = b.getAttribute("data-trait");
@@ -479,6 +513,7 @@
         e.preventDefault();
         var body = { id: id };
         ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate"].forEach(function (k) { body[k] = form[k].value; });
+        body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { toast("Saved"); location.hash = "#/characters"; })
           .catch(function (err) { document.getElementById("charErr").textContent = err.message; });
@@ -492,6 +527,7 @@
         // Save the card first so the prompt is written from what's on screen.
         var body = { id: id };
         ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate"].forEach(function (k) { body[k] = form[k].value; });
+        body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })
           .then(function (r) {
@@ -509,6 +545,41 @@
         api("/app/api/characters/" + id, { method: "DELETE" }).then(function () { location.hash = "#/characters"; });
       };
     });
+  }
+
+  // ---------- character profile ----------
+  function aiBtn(key) {
+    return '<button type="button" class="ai-one" data-ai="' + key + '" title="Write this with AI">✨</button>';
+  }
+  function lockBtn(secret) {
+    return '<button type="button" class="lock' + (secret ? " on" : "") + '" data-secret="' + (secret ? "1" : "0") + '" title="Secret: true, but they hide it. Public: you know or can see it.">' +
+      (secret ? "🔒 Secret" : "👁 Public") + "</button>";
+  }
+  function setSecret(btn, on) {
+    btn.dataset.secret = on ? "1" : "0";
+    btn.classList.toggle("on", !!on);
+    btn.textContent = on ? "🔒 Secret" : "👁 Public";
+  }
+  function profileSection(sections, prof) {
+    return '<div class="profile-box"><h3>Profile <span class="hint">everything that makes them real. Mark each detail public, or secret: true, but they hide it until the story earns it</span></h3>' +
+      sections.map(function (sec, si) {
+        var filled = sec.fields.filter(function (f) { return prof[f.key]; }).length;
+        return '<details' + (si === 0 || filled ? " open" : "") + '><summary>' + esc(sec.section) +
+          ' <span class="hint">' + filled + " of " + sec.fields.length + "</span></summary>" +
+          sec.fields.map(function (f) {
+            var v = prof[f.key] || { value: "", secret: false };
+            return '<div class="prow" data-prow="' + f.key + '"><div class="prow-head"><span>' + esc(f.label) + "</span>" + aiBtn(f.key) + lockBtn(v.secret) + "</div>" +
+              '<textarea rows="2" data-pkey="' + f.key + '" placeholder="' + esc(f.hint) + '">' + esc(v.value) + "</textarea></div>";
+          }).join("") + "</details>";
+      }).join("") + "</div>";
+  }
+  function collectProfile(form) {
+    var out = {};
+    form.querySelectorAll("[data-prow]").forEach(function (row) {
+      var v = row.querySelector("textarea").value.trim();
+      if (v) out[row.dataset.prow] = { value: v, secret: row.querySelector("[data-secret]").dataset.secret === "1" };
+    });
+    return out;
   }
 
   function portraitSection(id, c) {

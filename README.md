@@ -19,6 +19,17 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   attorney). Supernatural characters are welcome, but everyone is written and
   described as lifelike, never cartoon or anime. Create your own with traits,
   backstory, look and an opening line.
+- **Detailed character profiles.** Beyond the basics, each character has a
+  profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
+  piercings, style, scent, voice), personality (temperament, desires, fears,
+  flaws, habits, turn-ons, limits), life (job or business, wealth, house or
+  apartment, car, origin, family, allies, enemies, skills, routine), past,
+  supernatural (optional) and their relationship with you. Fill any field by
+  hand, or press ✨ to have the AI write it; the AI box at the top can fill
+  only the empty fields or the whole character from a one-line idea. Every
+  field has a lock: public details are things you know or can see, while
+  secret ones shape how the character acts but are only hinted at until the
+  story earns the reveal.
 - **Storylines.** Run as many separate roleplay storylines as you like. Each
   has its own title, premise, scenes (with any characters), clock and Day
   count, and the characters' memories stay inside it, so nothing leaks from one
