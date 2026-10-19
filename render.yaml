@@ -1,0 +1,31 @@
+# Dreamnet on Render (https://render.com): Dashboard > New > Blueprint, pick this
+# repository, fill in the two secrets it asks for, and click Apply.
+# Your chats, characters and pictures live on the attached disk, so they survive
+# restarts and updates. Nothing is visible without signing in.
+services:
+  - type: web
+    name: dreamnet
+    runtime: python
+    plan: starter            # a disk needs a paid plan (Starter is the smallest)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.main
+    healthCheckPath: /api/session
+    disk:
+      name: dreamnet-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DREAMNET_HOSTED
+        value: "1"
+      - key: FEATHERLESS_API_KEY
+        sync: false          # Render asks you for this when you create it
+      - key: ADMIN_PASSWORD
+        sync: false          # the password you sign in with as "admin"
+      - key: DATABASE_PATH
+        value: /var/data/dreamnet.db
+      - key: PORTRAIT_DIR
+        value: /var/data/portraits
+      - key: TTS_CACHE
+        value: /var/data/tts_cache
