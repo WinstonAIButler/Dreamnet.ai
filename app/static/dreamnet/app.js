@@ -365,8 +365,10 @@
         '<section class="chat">' +
         '<div class="chat-head">' + avatar(c) + '<div class="grow"><b>' + esc(c.name) + "</b><p>" +
         (conv.novel ? "Scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : esc(c.tagline)) + "</p></div>" +
+        '<button class="btn small" id="memBtn" title="What ' + esc(c.name) + ' remembers">Memory</button>' +
         '<button class="btn small" id="newScene" title="Start over with the opening line">New scene</button>' +
         '<button class="btn small ghost" id="delConv" title="Delete this scene">🗑</button></div>' +
+        '<div class="memory-panel" id="memPanel" hidden></div>' +
         '<div class="messages" id="msgs"></div>' +
         '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Write your reply. Use *asterisks* for actions."></textarea>' +
         '<button class="btn primary" id="sendBtn">Send</button></form>' +
@@ -437,6 +439,39 @@
         } else if (b.dataset.tochapter) {
           addToChapter(conv.novel.id, list[+b.dataset.tochapter].content);
         }
+      };
+      var memPanel = document.getElementById("memPanel");
+      function loadMemory() {
+        Promise.all([api("/app/api/characters/" + c.id + "/memories"), api("/app/api/conversations/" + convId)]).then(function (r) {
+          var mems = r[0], fresh = r[1];
+          memPanel.innerHTML =
+            '<div class="mem-col"><h4>This scene so far</h4>' +
+            '<textarea id="sumText" rows="5" placeholder="Filled in automatically once the scene gets long. You can edit it.">' + esc(fresh.summary) + "</textarea>" +
+            '<button class="btn small" id="sumSave">Save summary</button></div>' +
+            '<div class="mem-col"><h4>' + esc(c.name) + " remembers <span class=\"hint\">across every scene</span></h4>" +
+            '<form class="row" id="memAdd"><input id="memText" placeholder="Add something they should never forget"><button class="btn small">Add</button></form>' +
+            '<ul class="mem-list">' + (mems.map(function (m) {
+              return '<li><span>' + esc(m.content) + '</span><button data-delmem="' + m.id + '" title="Forget">×</button></li>';
+            }).join("") || '<li class="muted">Nothing yet. Memories are added automatically as you play.</li>') + "</ul></div>";
+          document.getElementById("sumSave").onclick = function () {
+            api("/app/api/conversations/" + convId + "/summary", { method: "PUT", body: { summary: document.getElementById("sumText").value } })
+              .then(function () { toast("Summary saved"); });
+          };
+          document.getElementById("memAdd").onsubmit = function (e) {
+            e.preventDefault();
+            var t = document.getElementById("memText").value.trim();
+            if (!t) return;
+            api("/app/api/characters/" + c.id + "/memories", { method: "POST", body: { content: t } }).then(loadMemory)
+              .catch(function (err) { toast(err.message, true); });
+          };
+          memPanel.querySelectorAll("[data-delmem]").forEach(function (b) {
+            b.onclick = function () { api("/app/api/memories/" + b.dataset.delmem, { method: "DELETE" }).then(loadMemory); };
+          });
+        });
+      }
+      document.getElementById("memBtn").onclick = function () {
+        memPanel.hidden = !memPanel.hidden;
+        if (!memPanel.hidden) loadMemory();
       };
       document.getElementById("newScene").onclick = function () {
         api("/app/api/conversations", { method: "POST", body: { character_id: c.id, novel_id: conv.novel ? conv.novel.id : null, new: true } })

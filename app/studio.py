@@ -5,6 +5,7 @@ in-character roleplay chats, novels with a story bible and chapters, and AI
 writing tools. Every model call goes through the proxy's own streaming
 handler, so it shares the proxy's queue, retries and usage logging.
 """
+import asyncio
 import json
 import os
 import secrets
@@ -30,6 +31,12 @@ WEB_KEY_NAME = "dreamnet-web"
 # Chat context window, the same limits JOSIE uses on device.
 MAX_HISTORY_TURNS = 20
 MAX_HISTORY_CHARS = 12_000
+# Long-term memory: once this many older messages have scrolled out of the
+# context window, they are folded into the scene summary and new lasting
+# facts are saved to the character's memories (the claude-mem pattern:
+# capture, compress, re-inject).
+COMPACT_EVERY = 8
+MAX_MEMORIES_IN_PROMPT = 25
 # How much of the current chapter the writing tools see.
 CHAPTER_CONTEXT_CHARS = 8_000
 
@@ -89,9 +96,21 @@ CREATE TABLE IF NOT EXISTS conversations (
     character_id INTEGER NOT NULL,
     novel_id INTEGER,                 -- set = the roleplay knows that story bible
     title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',           -- rolling "story so far" of older turns
+    summarized_upto INTEGER NOT NULL DEFAULT 0, -- last message id folded into summary
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
+
+-- Lasting facts a character remembers across every scene.
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'auto',        -- auto | user
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memories_char ON memories(character_id, id);
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,6 +213,10 @@ async def init_studio_db(db_path: str):
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(characters)")).fetchall()]
         if "portrait_prompt" not in cols:
             await db.execute("ALTER TABLE characters ADD COLUMN portrait_prompt TEXT NOT NULL DEFAULT ''")
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(conversations)")).fetchall()]
+        if "summary" not in cols:
+            await db.execute("ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE conversations ADD COLUMN summarized_upto INTEGER NOT NULL DEFAULT 0")
         await db.commit()
         n = (await (await db.execute("SELECT COUNT(*) FROM characters")).fetchone())[0]
         if n == 0:
@@ -420,18 +443,116 @@ async def _portrait_prompt(request: Request, s: dict, c: dict) -> str:
     messages = [{"role": "system", "content": portraits.PROMPT_INSTRUCTIONS},
                 {"role": "user", "content": card}]
     try:
-        key = await _web_key(s["user_id"])
-        cfg = api_routes._resolve_model(await get_model_by_id(DB_PATH, DEFAULT_MODEL))
-        result = await api_routes._handle_blocking(
-            request, {"model": DEFAULT_MODEL, "messages": messages, "temperature": 0.7, "max_tokens": 300},
-            DEFAULT_MODEL, messages, 0.7, cfg, key, s["user_id"], api_routes._is_admin_key(key),
-            key.get("priority", 1), 0.0)
-        text = result["choices"][0]["message"]["content"].strip().strip('"')
+        text = (await _complete(s["user_id"], messages, 0.7, 300)).strip().strip('"')
         if len(text) > 40:
             return text
     except Exception:
         pass
     return portraits.template_prompt(c)
+
+
+async def _complete(user_id: int, messages: list[dict], temperature: float, max_tokens: int,
+                    model: str | None = None) -> str:
+    """One non-streaming completion through the proxy's queue; returns the text."""
+    model = model or DEFAULT_MODEL
+    key = await _web_key(user_id)
+    cfg = api_routes._resolve_model(await get_model_by_id(DB_PATH, model))
+    result = await api_routes._handle_blocking(
+        None, {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
+        model, messages, temperature, cfg, key, user_id, api_routes._is_admin_key(key),
+        key.get("priority", 1), 0.0)
+    return result["choices"][0]["message"]["content"]
+
+
+# --- long-term memory ---
+
+def _parse_memory_json(text: str) -> dict | None:
+    """Pull the first JSON object out of a model reply."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def compact_conversation(conv_id: int, user_id: int, username: str):
+    """Fold messages that fell out of the context window into the scene summary,
+    and save new lasting facts as character memories."""
+    cv = await _row("SELECT * FROM conversations WHERE id = ?", (conv_id,))
+    if not cv:
+        return
+    c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
+    history = await _rows("SELECT id, role, content FROM messages WHERE conversation_id = ? ORDER BY id", (conv_id,))
+    in_window = len(_history_window(history))
+    older = [m for m in history[:len(history) - in_window] if m["id"] > cv["summarized_upto"]]
+    if len(older) < COMPACT_EVERY:
+        return
+    known = [m["content"] for m in await _rows("SELECT content FROM memories WHERE character_id = ? ORDER BY id",
+                                                (c["id"],))]
+    transcript = "\n".join(f"{c['name'] if m['role'] == 'assistant' else username}: {m['content']}" for m in older)
+    messages = [
+        {"role": "system", "content":
+            "You keep continuity notes for an ongoing role-play. Reply with JSON only, in this shape: "
+            '{"summary": "...", "memories": ["...", "..."]}. "summary" is the updated story so far in 4 to 8 '
+            "sentences: key events, how the relationship has changed, unresolved threads, where the scene is now. "
+            f'"memories" lists up to 5 NEW lasting facts {c["name"]} would remember about {username} or their '
+            "relationship (names, preferences, secrets, promises, turning points), one short sentence each, "
+            "leaving out anything already in the known memories."},
+        {"role": "user", "content":
+            f"Story so far:\n{cv['summary'] or '(nothing yet)'}\n\nKnown memories:\n"
+            + ("\n".join(f"- {k}" for k in known) or "(none)")
+            + f"\n\nNew part of the transcript:\n{transcript[-16000:]}"},
+    ]
+    try:
+        data = _parse_memory_json(await _complete(user_id, messages, 0.3, 700))
+    except Exception:
+        return
+    if not data:
+        return
+    summary = str(data.get("summary") or "").strip()[:4000]
+    now = time.time()
+    await _exec("UPDATE conversations SET summary = ?, summarized_upto = ? WHERE id = ?",
+                (summary or cv["summary"], older[-1]["id"], conv_id))
+    for mem in (data.get("memories") or [])[:5]:
+        mem = str(mem).strip()[:300]
+        if mem and mem not in known and not mentions_minor(mem):
+            await _exec("INSERT INTO memories (character_id, content, source, created_at) VALUES (?,?,?,?)",
+                        (c["id"], mem, "auto", now))
+
+
+@router.get("/characters/{cid}/memories")
+async def list_memories(cid: int, s: dict = Depends(_session)):
+    return JSONResponse(await _rows("SELECT id, content, source, created_at FROM memories WHERE character_id = ? "
+                                    "ORDER BY id DESC", (cid,)))
+
+
+@router.post("/characters/{cid}/memories")
+async def add_memory(cid: int, request: Request, s: dict = Depends(_session)):
+    body = await request.json()
+    text = str(body.get("content") or "").strip()[:300]
+    if not text:
+        return _err(400, "Write the memory first.")
+    if mentions_minor(text):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    mid = await _exec("INSERT INTO memories (character_id, content, source, created_at) VALUES (?,?,?,?)",
+                      (cid, text, "user", time.time()))
+    return JSONResponse({"id": mid})
+
+
+@router.delete("/memories/{mid}")
+async def delete_memory(mid: int, s: dict = Depends(_session)):
+    await _exec("DELETE FROM memories WHERE id = ?", (mid,))
+    return JSONResponse({"ok": True})
+
+
+@router.put("/conversations/{conv_id}/summary")
+async def edit_summary(conv_id: int, request: Request, s: dict = Depends(_session)):
+    body = await request.json()
+    await _exec("UPDATE conversations SET summary = ? WHERE id = ?", (str(body.get("summary") or "")[:4000], conv_id))
+    return JSONResponse({"ok": True})
 
 
 @router.delete("/characters/{cid}")
@@ -441,6 +562,7 @@ async def delete_character(cid: int, s: dict = Depends(_session)):
                          "(SELECT id FROM conversations WHERE character_id = ?)", (cid,))
         await db.execute("DELETE FROM conversations WHERE character_id = ?", (cid,))
         await db.execute("DELETE FROM novel_cast WHERE character_id = ?", (cid,))
+        await db.execute("DELETE FROM memories WHERE character_id = ?", (cid,))
         await db.execute("DELETE FROM characters WHERE id = ?", (cid,))
         await db.commit()
     return JSONResponse({"ok": True})
@@ -486,7 +608,7 @@ async def get_conversation(conv_id: int, s: dict = Depends(_session)):
     c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
     novel = await _row("SELECT id, title FROM novels WHERE id = ?", (cv["novel_id"],)) if cv["novel_id"] else None
     msgs = await _rows("SELECT id, role, content FROM messages WHERE conversation_id = ? ORDER BY id", (conv_id,))
-    return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs})
+    return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs, "summary": cv["summary"]})
 
 
 @router.delete("/conversations/{conv_id}")
@@ -505,6 +627,9 @@ async def delete_message(msg_id: int, s: dict = Depends(_session)):
     if not m:
         return _err(404, "Message not found")
     await _exec("DELETE FROM messages WHERE conversation_id = ? AND id >= ?", (m["conversation_id"], msg_id))
+    # Rewinding past summarized messages invalidates the scene summary.
+    await _exec("UPDATE conversations SET summary = '', summarized_upto = 0 WHERE id = ? AND summarized_upto >= ?",
+                (m["conversation_id"], msg_id))
     return JSONResponse({"ok": True})
 
 
@@ -540,6 +665,13 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         novel, cast = await _novel_with_cast(cv["novel_id"])
         if novel:
             system += "\nThis role-play is a scene for the user's novel. Story bible:\n" + _bible(novel, cast) + "\n"
+    mems = await _rows("SELECT content FROM memories WHERE character_id = ? ORDER BY id DESC LIMIT ?",
+                       (c["id"], MAX_MEMORIES_IN_PROMPT))
+    if mems:
+        system += (f"\nThings {c['name']} remembers from earlier scenes with {s['username']}:\n"
+                   + "\n".join(f"- {m['content']}" for m in reversed(mems)) + "\n")
+    if cv["summary"]:
+        system += f"\nThis scene so far (earlier messages, summarized):\n{cv['summary']}\n"
     system += "\n" + SAFETY_RULES
 
     history = await _rows("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id", (conv_id,))
@@ -548,6 +680,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     async def save(reply):
         await _exec("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?,?,?,?)",
                     (conv_id, "assistant", reply, time.time()))
+        asyncio.create_task(compact_conversation(conv_id, s["user_id"], s["username"]))
 
     model = body.get("model_id") or DEFAULT_MODEL
     return await _stream(request, s, model, messages, 0.9, 450, save)

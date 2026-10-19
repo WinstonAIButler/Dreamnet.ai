@@ -22,6 +22,11 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
 - **Roleplay scenes.** Chat in character with streaming replies, regenerate,
   rewind, start a new scene. Start a scene from a novel's cast and the character
   knows the story bible; any reply can be added to the latest chapter.
+- **Long-term memory.** As a scene grows past the model's context window, older
+  messages are folded into a "scene so far" summary, and lasting facts (names,
+  promises, secrets, turning points) are saved to the character's memory, which
+  every later scene with them reads. Both are visible and editable from the
+  **Memory** button in a scene.
 - **Lifelike portraits.** One click turns a character card into a photorealistic
   portrait, using the Z-Image-Turbo workflow from Intel AI Playground on your
   own ComfyUI.
@@ -110,6 +115,7 @@ other accounts.
 | Safety checks and crisis reply | `app/safety.py`, crisis phrases from JOSIE-Bot |
 | Chat history window (20 turns, 12k chars) and crisis phrases | JOSIE-Bot (MIT, see `docs/LICENSE-JOSIE-Bot.md`) |
 | Installable app shell and service worker | ANEEMA app package |
+| Long-term memory: capture, compress, re-inject | the claude-mem pattern, reimplemented in `app/studio.py` |
 | Portrait workflow and photo-prompt instructions | Intel AI Playground `z-image.json` preset (MIT, see `docs/LICENSE-AI-Playground.md`) |
 | Web app | `app/static/dreamnet/` (no build step) |
 
