@@ -243,6 +243,21 @@ LIFELIKE_RULES = (
     "emotions, and keep consistent memories, moods and motives."
 )
 
+# The character has to engage with what the user just wrote: answer their questions, react to what
+# they did, and follow their out-of-character directions.
+ANSWER_RULES = (
+    "Most important: every reply responds directly to {user}'s latest message. If {user} asks {name} a question, "
+    "{name} answers it in that reply, in character, clearly and specifically, before anything else happens. If "
+    "{user} says or does something, {name} reacts to exactly that. Never ignore, dodge or change the subject from "
+    "what {user} just wrote. In {user}'s messages, \"quotes\" are spoken aloud, *asterisks* are actions, and "
+    "`backticks` are {user}'s private thoughts, which {name} cannot hear but can read from their face. Text in "
+    "(parentheses), [brackets] or starting with OOC: is {user} talking to you, the writer, out of character: "
+    "follow those directions (where the story goes, what happens next, how {name} should act) and keep writing "
+    "the story; only answer out of character if they ask a question about the story itself."
+)
+ANSWER_NUDGE = ("[Respond as {name} to the message above: answer any question in it directly and react to what "
+                "was said and done. Follow any out-of-character direction.]")
+
 ASSIST_MODES = {
     "continue": "Continue the chapter directly from where the text ends. Do not repeat what is already written.",
     "scene": "Write the scene described in the instruction, in a way that fits after the current text.",
@@ -1698,7 +1713,8 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         f"role-play with {s['username']}. Stay in character. Write only {c['name']}'s replies, 1 to 3 paragraphs, and never speak or act for the user. "
         "Format every reply the same way: spoken words in \"double quotes\", actions and body language in "
         f"*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
-        "`She has no idea.` \"You should go.\" " + LIFELIKE_RULES + " Dark themes, tension "
+        "`She has no idea.` \"You should go.\" " + ANSWER_RULES.format(name=c["name"], user=s["username"])
+        + " " + LIFELIKE_RULES + " Dark themes, tension "
         "and explicit adult content between consenting adult characters are allowed in this private story.\n\n"
         f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
     ) + profiles.for_prompt(profiles.clean(c["profile"]), c["name"], s["username"])
@@ -1759,6 +1775,9 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
 
     messages = [{"role": "system", "content": system}] + _chat_turns(window, start)
     last = history[-1] if history else None
+    if not more and messages[-1]["role"] == "user":
+        # The system prompt is long; a reminder right after the user's words keeps a small model on them.
+        messages[-1]["content"] += "\n\n" + ANSWER_NUDGE.format(name=c["name"])
     if more:
         if not last or last["role"] != "assistant":
             return _err(400, "There's no reply to continue.")
