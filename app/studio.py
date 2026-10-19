@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
+import app.option_images as option_images
+import app.places as places
 import app.portraits as portraits
 import app.profile as profiles
 import app.voices as voices
@@ -126,6 +128,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     summary TEXT NOT NULL DEFAULT '',           -- rolling "story so far" of older turns
     summarized_upto INTEGER NOT NULL DEFAULT 0, -- last message id folded into summary
     time_rules TEXT NOT NULL DEFAULT '',        -- JSON list of extra or overriding actions for this scene
+    location TEXT NOT NULL DEFAULT '',          -- where the scene starts
+    situation TEXT NOT NULL DEFAULT '',         -- the scenario: what's going on as it starts (optional)
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -418,6 +422,9 @@ async def init_studio_db(db_path: str):
             await db.execute("ALTER TABLE conversations ADD COLUMN time_rules TEXT NOT NULL DEFAULT ''")
         if "storyline_id" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN storyline_id INTEGER")
+        if "location" not in cols:
+            await db.execute("ALTER TABLE conversations ADD COLUMN location TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE conversations ADD COLUMN situation TEXT NOT NULL DEFAULT ''")
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(memories)")).fetchall()]
         if "storyline_id" not in cols:
             await db.execute("ALTER TABLE memories ADD COLUMN storyline_id INTEGER")
@@ -1345,11 +1352,12 @@ async def delete_storyline(sid: int, s: dict = Depends(_session)):
 @router.get("/conversations")
 async def conversations(s: dict = Depends(_session)):
     return JSONResponse(await _rows(
-        """SELECT cv.id, cv.character_id, cv.novel_id, cv.storyline_id, cv.updated_at, c.name, c.avatar, c.color,
-             n.title AS novel_title,
+        """SELECT cv.id, cv.character_id, cv.novel_id, cv.storyline_id, cv.updated_at, cv.location, c.name, c.avatar, c.color,
+             n.title AS novel_title, st.title AS storyline_title,
              (SELECT content FROM messages m WHERE m.conversation_id = cv.id ORDER BY m.id DESC LIMIT 1) AS last
            FROM conversations cv JOIN characters c ON c.id = cv.character_id
            LEFT JOIN novels n ON n.id = cv.novel_id
+           LEFT JOIN storylines st ON st.id = cv.storyline_id
            ORDER BY cv.updated_at DESC LIMIT 200"""))
 
 
@@ -1384,12 +1392,76 @@ async def start_conversation(request: Request, s: dict = Depends(_session)):
             start = await _storyline_clock(storyline_id) or datetime.now()
     except ValueError:
         return _err(400, "That story start time isn't a valid date and time.")
-    cv = await _exec("INSERT INTO conversations (character_id, novel_id, storyline_id, created_at, updated_at) "
-                     "VALUES (?,?,?,?,?)", (c["id"], novel_id, storyline_id, now, now))
+    location = " ".join(str(body.get("location") or "").split())[:300]
+    situation = str(body.get("situation") or "").strip()[:1500]
+    first_line = str(body.get("opening") or "").strip()[:2000]  # the scene's first message, written by the user
+    user_first = body.get("first") == "you" and bool(first_line)
+    if mentions_minor(location + " " + situation + " " + first_line, strict=True):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    cv = await _exec("INSERT INTO conversations (character_id, novel_id, storyline_id, location, situation, "
+                     "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                     (c["id"], novel_id, storyline_id, location, situation, now, now))
     await _exec("UPDATE storylines SET updated_at = ? WHERE id = ?", (now, storyline_id))
+    if location or situation:
+        mark = f"Starts at: {location}" if location else "Scenario: " + (situation[:80] + ("…" if len(situation) > 80 else ""))
+        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                    (cv, "mark", mark, _iso(start), now))
+    if user_first:  # the user opens the scene; the web app asks for the character's reply next
+        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                    (cv, "user", first_line, _iso(start), now))
+        return JSONResponse({"id": cv, "awaiting_reply": True})
+    opening = first_line or c["greeting"]
+    if not first_line and (location or situation):
+        opening = await _opening(s, c, storyline_id, location, situation, start) or opening
     await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
-                (cv, "assistant", c["greeting"], _iso(start), now))
+                (cv, "assistant", opening, _iso(start), now))
     return JSONResponse({"id": cv})
+
+
+@router.get("/places")
+async def list_places(character_id: int = 0, s: dict = Depends(_session)):
+    c = await _row("SELECT * FROM characters WHERE id = ?", (character_id,)) if character_id else None
+    return JSONResponse({"groups": places.catalog(c)})
+
+
+@router.get("/option-image")
+async def option_image(set: str, key: str, g: str = "", s: dict = Depends(_session)):
+    """Realistic photo for a choice tile in the character creator or the place picker."""
+    key = " ".join(key.split())[:200]
+    if set not in option_images.TEMPLATES or not key:
+        return _err(404, "No picture for that.")
+    if mentions_minor(key, strict=True):
+        return _err(400, "Pictures must show adults only.")
+    try:
+        png = await option_images.get(api_routes.http_client, set, key, g if g in ("male", "female", "non-binary") else "")
+    except option_images.OptionImageError as e:
+        return _err(503, str(e))
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=2592000"})
+
+
+async def _opening(s: dict, c: dict, storyline_id: int, location: str, situation: str, start: datetime) -> str:
+    """The character's first message, set at the chosen place. Empty if the model can't write one."""
+    story = await _row("SELECT * FROM storylines WHERE id = ?", (storyline_id,))
+    system = (f"You are {c['name']}, a {c['age']}-year-old {c['gender']} character in an interactive dark romance "
+              f"role-play with {s['username']}. " + LIFELIKE_RULES + "\n\n"
+              f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
+              + profiles.for_prompt(profiles.clean(c["profile"]), c["name"], s["username"])
+              + (f"\nStoryline: {story['title']}" + (f". {story['premise']}" if story["premise"] else "") + "\n"
+                 if story else "")
+              + f"\nYour usual opening line, for your voice only: {c['greeting']}\n\n" + SAFETY_RULES)
+    ask = (f"Write {c['name']}'s opening message for a new scene. Place: {location or 'your choice'}. "
+           f"Time: {_clock_text(_iso(start))}, {_daypart(start)}. "
+           + (f"Scenario: {situation} " if situation else "")
+           + f"Set the scene through {c['name']}'s senses and actions, then give {s['username']} something to "
+           "answer. 1 to 2 paragraphs. Never speak or act for the user. Write spoken words in \"double quotes\", "
+           "actions in *asterisks* and private thoughts in `backticks`. No time tags, no preamble.")
+    try:
+        text = (await _complete(s["user_id"], [{"role": "system", "content": system},
+                                               {"role": "user", "content": ask}], 0.9, 450)).strip()
+    except Exception:
+        return ""
+    text = _TIME_TAG.sub("", text).strip()
+    return text if len(text) > 20 and not mentions_minor(text) else ""
 
 
 @router.get("/conversations/{conv_id}")
@@ -1404,6 +1476,7 @@ async def get_conversation(conv_id: int, s: dict = Depends(_session)):
     upto = next((m["created_at"] for m in msgs if m["id"] == cv["summarized_upto"]), None)
     return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs, "summary": cv["summary"],
                          "summary_upto": upto, "clock": _iso(await _scene_clock(cv)),
+                         "location": cv["location"] or "", "situation": cv["situation"] or "",
                          "start": await _story_start(cv),
                          "storyline": await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],)),
                          "time_rules": json.loads(cv["time_rules"]) if cv["time_rules"] else []})
@@ -1417,6 +1490,56 @@ async def delete_conversation(conv_id: int, s: dict = Depends(_session)):
         await db.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
         await db.commit()
     return JSONResponse({"ok": True})
+
+
+@router.put("/messages/{msg_id}")
+async def edit_message(msg_id: int, request: Request, s: dict = Depends(_session)):
+    """Rewrite one of your messages or one of the character's replies."""
+    body = await request.json()
+    text = str(body.get("content") or "").strip()[:6000]
+    m = await _row("SELECT * FROM messages WHERE id = ?", (msg_id,))
+    if not m or m["role"] not in ("user", "assistant"):
+        return _err(404, "Message not found")
+    if not text:
+        return _err(400, "A message can't be empty. Use Rewind to remove it.")
+    if mentions_minor(text):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    await _exec("UPDATE messages SET content = ? WHERE id = ?", (text, msg_id))
+    return JSONResponse({"ok": True, "content": text})
+
+
+@router.post("/conversations/{conv_id}/suggest")
+async def suggest_reply(conv_id: int, request: Request, s: dict = Depends(_session)):
+    """Write (or polish) the user's next message, in their voice, for the magic-wand button."""
+    body = await request.json()
+    draft = str(body.get("draft") or "").strip()[:2000]
+    cv = await _row("SELECT * FROM conversations WHERE id = ?", (conv_id,))
+    if not cv:
+        return _err(404, "Chat not found")
+    c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
+    if draft and mentions_minor(draft):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    recent = await _rows("SELECT role, content FROM messages WHERE conversation_id = ? AND role != 'mark' "
+                         "ORDER BY id DESC LIMIT 8", (conv_id,))
+    lines = "\n\n".join(f"{c['name'] if m['role'] == 'assistant' else s['username']}: "
+                         + _TIME_TAG.sub("", m["content"]).strip() for m in reversed(recent))
+    system = (f"You help {s['username']} write their next message in a private dark romance role-play with "
+              f"{c['name']}. Write only {s['username']}'s own message, in first person, as {s['username']}: never "
+              f"speak or act for {c['name']}. Spoken words in \"double quotes\", actions in *asterisks*, private "
+              "thoughts in `backticks`. 1 short paragraph. No preamble, no name label, no time tags.\n\n"
+              + SAFETY_RULES)
+    ask = (("Scene so far:\n" + lines + "\n\n") if lines else "") + (
+        f"{s['username']}'s rough draft: {draft}\nRewrite it as a vivid message that keeps exactly what they meant."
+        if draft else f"Write a message {s['username']} could send next that moves the scene forward.")
+    try:
+        text = (await _complete(s["user_id"], [{"role": "system", "content": system},
+                                               {"role": "user", "content": ask}], 0.9, 220)).strip()
+    except Exception:
+        return _err(502, "Couldn't write a suggestion right now. Try again.")
+    text = re.sub(rf"^\s*{re.escape(s['username'])}\s*:\s*", "", _TIME_TAG.sub("", text)).strip()
+    if not text or mentions_minor(text):
+        return _err(502, "Couldn't write a suggestion right now. Try again.")
+    return JSONResponse({"text": text})
 
 
 @router.delete("/messages/{msg_id}")
@@ -1541,6 +1664,7 @@ async def delete_mark(msg_id: int, s: dict = Depends(_session)):
 async def send_message(conv_id: int, request: Request, s: dict = Depends(_session)):
     body = await request.json()
     text = (body.get("content") or "").strip()[:6000]
+    more = bool(body.get("continue")) and not text  # carry on the character's last reply
     cv = await _row("SELECT * FROM conversations WHERE id = ?", (conv_id,))
     if not cv:
         return _err(404, "Chat not found")
@@ -1573,7 +1697,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         f"You are {c['name']}, a {c['age']}-year-old {c['gender']} character in an interactive dark romance "
         f"role-play with {s['username']}. Stay in character. Write only {c['name']}'s replies, 1 to 3 paragraphs, and never speak or act for the user. "
         "Format every reply the same way: spoken words in \"double quotes\", actions and body language in "
-        "*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
+        f"*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
         "`She has no idea.` \"You should go.\" " + LIFELIKE_RULES + " Dark themes, tension "
         "and explicit adult content between consenting adult characters are allowed in this private story.\n\n"
         f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
@@ -1585,6 +1709,10 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     story = await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],))
     if story:
         system += f"\nStoryline: {story['title']}" + (f". {story['premise']}" if story["premise"] else "") + "\n"
+    if cv["location"] or cv["situation"]:
+        system += ("\nThis scene began " + (f"at: {cv['location']}." if cv["location"] else "") +
+                   (f" Scenario: {cv['situation']}" if cv["situation"] else "") +
+                   " Keep the place's details consistent; people can move elsewhere as the story goes.\n")
     # User-written memories always go in; the newest automatic ones fill the rest.
     mems = await _rows("""SELECT * FROM (SELECT content, said_at, story_time, created_at, source, id FROM memories
                           WHERE character_id = ? AND (storyline_id = ? OR storyline_id IS NULL)
@@ -1630,17 +1758,154 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
                f"{c['name']} isn't sure, they stay vague instead of making it up.\n\n" + SAFETY_RULES)
 
     messages = [{"role": "system", "content": system}] + _chat_turns(window, start)
+    last = history[-1] if history else None
+    if more:
+        if not last or last["role"] != "assistant":
+            return _err(400, "There's no reply to continue.")
+        messages.append({"role": "user", "content": f"[Continue {c['name']}'s last reply right where it stopped, "
+                         "with 1 to 2 more paragraphs. Don't repeat anything already written.]"})
 
     async def save(reply):
         reply, minutes = _elapsed(reply, float(tset["pace"]))
         if override is not None:
             minutes = override
+        if more:
+            base = datetime.fromisoformat(last["story_at"]) if last["story_at"] else clock
+            await _exec("UPDATE messages SET content = ?, story_at = ? WHERE id = ?",
+                        (last["content"].rstrip() + "\n\n" + reply.strip(), _iso(base + timedelta(minutes=minutes)),
+                         last["id"]))
+            return
         await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
                     (conv_id, "assistant", reply, _iso(clock + timedelta(minutes=minutes)), time.time()))
         asyncio.create_task(compact_conversation(conv_id, s["user_id"], s["username"]))
 
     model = body.get("model_id") or DEFAULT_MODEL
     return await _stream(request, s, model, messages, 0.9, 450, save)
+
+
+# --- roleplay to manuscript ---
+# A scene (or a whole storyline) is rewritten as novel chapters, one part at a time, in the background.
+
+MANUSCRIPT_PART_CHARS = 9000   # transcript per chapter
+MANUSCRIPT_MAX_PARTS = 40
+_manuscripts: dict[int, dict] = {}  # novel id -> {"done", "total", "error", "running"}
+
+
+def _manuscript_parts(msgs: list[dict], name: str, you: str, start: str) -> list[str]:
+    parts, cur = [], ""
+    for m in msgs:
+        if m["role"] == "mark":
+            line = f"[Scene note: {m['content']}" + (f" | {_clock_text(m['story_at'], start)}]" if m.get("story_at") else "]")
+        else:
+            line = f"{name if m['role'] == 'assistant' else you}: " + _TIME_TAG.sub("", m["content"]).strip()
+        if cur and len(cur) + len(line) > MANUSCRIPT_PART_CHARS:
+            parts.append(cur)
+            cur = ""
+        cur += line + "\n\n"
+    if cur.strip():
+        parts.append(cur)
+    return parts[:MANUSCRIPT_MAX_PARTS]
+
+
+async def _write_manuscript(nid: int, chapter_ids: list[int], parts: list[str], user_id: int, you: str, base: int):
+    job = _manuscripts[nid]
+    novel, cast = await _novel_with_cast(nid)
+    before = await _row("SELECT content FROM chapters WHERE novel_id = ? AND position = ?", (nid, base)) if base else None
+    previous = (before["content"] if before else "")[-1200:]
+    try:
+        for i, (cid, part) in enumerate(zip(chapter_ids, parts)):
+            system = ("You are a novelist turning a private role-play transcript into a chapter of a dark romance "
+                      f"manuscript. Story bible:\n{_bible(novel, cast)}\n\n"
+                      f"{you} is the role-play's other lead; write them as a full character named {you}. "
+                      f"Point of view and tense: {novel['pov']}. Keep every event, choice and important line of "
+                      "dialogue from the transcript, in order; polish the words, add setting, body language and "
+                      "interiority, and smooth the jumps between turns into continuous prose. Never add events that "
+                      "aren't there. Inner thoughts in the transcript (in backticks) become interior narration. "
+                      "Use normal book formatting: dialogue in double quotes, no asterisks, no backticks, no time "
+                      "tags, no speaker labels. " + LIFELIKE_RULES + "\n\n" + SAFETY_RULES)
+            ask = ((f"The previous chapter ended like this:\n{previous}\n\n" if previous else "This is the opening chapter.\n\n")
+                   + f"Transcript for chapter {base + i + 1}:\n{part}\n"
+                   "Reply with the chapter title on the first line as 'Title: ...', then the chapter.")
+            text = (await _complete(user_id, [{"role": "system", "content": system},
+                                              {"role": "user", "content": ask}], 0.8, 3000, novel["model_id"])).strip()
+            text = _TIME_TAG.sub("", text)
+            title, body = f"Chapter {base + i + 1}", text
+            first, _, rest = text.partition("\n")
+            if first.lower().lstrip("#* ").startswith("title:"):
+                title = f"Chapter {base + i + 1}: " + first.split(":", 1)[1].strip(" *#\"")[:100]
+                body = rest.strip()
+            if mentions_minor(body):
+                body = "[This part was left out: the draft broke Dreamnet's adults-only rule. Rewrite it by hand.]"
+            await _exec("UPDATE chapters SET title = ?, content = ?, updated_at = ? WHERE id = ?",
+                        (title, body, time.time(), cid))
+            previous = body[-1200:]
+            job["done"] = i + 1
+    except Exception as e:  # keep what's written; the rest stays as empty chapters
+        job["error"] = f"Stopped after {job['done']} of {job['total']} chapters: {e}"[:300]
+    finally:
+        job["running"] = False
+        await _exec("UPDATE novels SET updated_at = ? WHERE id = ?", (time.time(), nid))
+
+
+@router.post("/conversations/{conv_id}/manuscript")
+async def make_manuscript(conv_id: int, request: Request, s: dict = Depends(_session)):
+    """Turn this scene, or its whole storyline, into a manuscript: a new novel, or new chapters in one."""
+    body = await request.json()
+    cv = await _row("SELECT * FROM conversations WHERE id = ?", (conv_id,))
+    if not cv:
+        return _err(404, "Chat not found")
+    c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
+    story = await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],)) if cv["storyline_id"] else None
+    whole = body.get("scope") == "storyline" and story
+    convs = (await _rows("SELECT * FROM conversations WHERE storyline_id = ? ORDER BY id", (story["id"],))) if whole else [cv]
+    you = " ".join(str(body.get("you") or s["username"]).split())[:60] or s["username"]
+    start = await _story_start(cv) or ""
+    msgs = []
+    for x in convs:
+        msgs += await _rows("SELECT role, content, story_at FROM messages WHERE conversation_id = ? ORDER BY id", (x["id"],))
+    if not any(m["role"] == "assistant" for m in msgs):
+        return _err(400, "There's nothing to write yet. Play the scene first.")
+    parts = _manuscript_parts(msgs, c["name"], you, start)
+    title = " ".join(str(body.get("title") or "").split())[:120]
+    pov = str(body.get("pov") or "").strip()[:80] or NOVEL_DEFAULTS["pov"]
+    if mentions_minor(title + " " + you):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    now = time.time()
+    nid = int(body.get("novel_id") or 0)
+    if nid:
+        if not await _row("SELECT id FROM novels WHERE id = ?", (nid,)):
+            return _err(404, "Novel not found")
+        if any(j.get("running") for k, j in _manuscripts.items() if k == nid):
+            return _err(409, "That novel is already being written. Wait for it to finish.")
+        # drop the empty starter chapter a new novel comes with
+        await _exec("DELETE FROM chapters WHERE novel_id = ? AND content = '' AND position = 1 AND "
+                    "(SELECT COUNT(*) FROM chapters WHERE novel_id = ?) = 1", (nid, nid))
+    else:
+        premise = " ".join(x for x in [story["premise"] if story else "", cv["situation"] or "",
+                                       f"It begins at {cv['location']}." if cv["location"] else ""] if x)
+        nid = await _exec(f"INSERT INTO novels ({', '.join(NOVEL_FIELDS)}, created_at, updated_at) "
+                          f"VALUES ({', '.join('?' * len(NOVEL_FIELDS))}, ?, ?)",
+                          (title or (story["title"] if story else f"{c['name']} and {you}"), premise[:6000], "",
+                           cv["location"] or "", pov, NOVEL_DEFAULTS["tone"], NOVEL_DEFAULTS["heat"],
+                           f"Adapted from a role-play. {you} is the other lead.", None, now, now))
+        await _exec("INSERT OR REPLACE INTO novel_cast (novel_id, character_id, role) VALUES (?,?,?)",
+                    (nid, c["id"], "lead"))
+    base = (await _row("SELECT COALESCE(MAX(position), 0) AS p FROM chapters WHERE novel_id = ?", (nid,)))["p"]
+    ids = []
+    for i in range(len(parts)):
+        ids.append(await _exec("INSERT INTO chapters (novel_id, position, title, content, updated_at) VALUES (?,?,?,?,?)",
+                               (nid, base + i + 1, f"Chapter {base + i + 1} (writing…)", "", now)))
+    if not whole:
+        await _exec("UPDATE conversations SET novel_id = COALESCE(novel_id, ?) WHERE id = ?", (nid, conv_id))
+    _manuscripts[nid] = {"done": 0, "total": len(parts), "error": "", "running": True}
+    asyncio.create_task(_write_manuscript(nid, ids, parts, s["user_id"], you, base))
+    return JSONResponse({"novel_id": nid, "chapters": len(parts)})
+
+
+@router.get("/novels/{nid}/manuscript")
+async def manuscript_status(nid: int, s: dict = Depends(_session)):
+    job = _manuscripts.get(nid)
+    return JSONResponse(job or {"done": 0, "total": 0, "error": "", "running": False})
 
 
 # --- novels ---

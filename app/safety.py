@@ -23,6 +23,7 @@ _STRONG_TERMS = [
 _CHARACTER_TERMS = _STRONG_TERMS + [
     "child", "children", "childlike", "kid", "kids", "minor", "teen", "teens",
     "teenager", "teenage", "little girl", "little boy", "infant", "baby-faced",
+    "high school", "middle school", "elementary school", "primary school", "grade school",
 ]
 
 
@@ -35,8 +36,13 @@ _CHARACTER_RE = _terms_re(_CHARACTER_TERMS)
 
 # "15 years old", "15-year-old", "15yo", "16 y/o", "age 12", "aged 12".
 _AGE_RE = re.compile(
-    r"\b(?:(\d{1,2})\s*-?\s*(?:years?|yrs?)\s*-?\s*old|(\d{1,2})\s*y/?o|aged?\s+(\d{1,2}))\b",
+    r"\b(?:(\d{1,2})\s*-?\s*(?:years?|yrs?)\s*-?\s*old|(\d{1,2})\s*y/?o|aged?\s+(?:of\s+)?(\d{1,2}))\b",
     re.I)
+# "she is 15", "he's 16", "I'm only 17", "they were 14": a person plus a bare number, not a height or time.
+_IS_AGE_RE = re.compile(
+    r"\b(?:she|he|they|i|you|we)\s*(?:is|was|are|were|am|'s|'m|'re)\s+(?:only\s+|just\s+|barely\s+)?(\d{1,2})"
+    r"(?![\d'\"’]|\s*(?:feet|foot|ft|inch|inches|cm|m\b|kg|lbs?|pounds|minutes?|mins?|hours?|o'clock|am\b|pm\b|%|percent|"
+    r"times|steps|miles|km|meters|metres|days|weeks|months|seconds|secs|of\b|out\b|to\b|against\b|vs\b|down\b|up\b|ahead\b|behind\b|-))", re.I)
 
 _CRISIS_PHRASES = [
     "kill myself", "killing myself", "want to die", "wanna die",
@@ -67,7 +73,7 @@ def mentions_minor(text: str, strict: bool = False) -> bool:
         return False
     if (_CHARACTER_RE if strict else _STRONG_RE).search(text):
         return True
-    for m in _AGE_RE.finditer(text):
+    for m in list(_AGE_RE.finditer(text)) + list(_IS_AGE_RE.finditer(text)):
         age = next((g for g in m.groups() if g), None)
         if age and int(age) < MIN_CHARACTER_AGE:
             return True
