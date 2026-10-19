@@ -334,3 +334,38 @@ a.card.new { text-decoration: none; }
 .mem-list button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; }
 .mem-list button:hover { color: var(--accent); }
 @media (max-width: 860px) { .memory-panel { grid-template-columns: 1fr; } }
+
+/* Time marks in scenes */
+.msg-tools time { font-size: 11px; color: var(--muted); padding: 2px 6px; opacity: .8; }
+.msg .msg-tools { opacity: 1; }
+.msg .msg-tools button { opacity: 0; transition: opacity .15s; }
+.msg:hover .msg-tools button { opacity: 1; }
+@media (hover: none) { .msg .msg-tools button { opacity: 1; } }
+.day-mark { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; letter-spacing: .04em; }
+.day-mark::before, .day-mark::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.story-mark { align-self: center; display: flex; align-items: center; gap: 8px; padding: 5px 12px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--bg-2); font-size: 13px; font-style: italic; }
+.story-mark time { font-size: 11px; color: var(--muted); font-style: normal; }
+.story-mark button { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.story-mark button:hover { color: var(--accent); }
+.mem-list li .grow { display: flex; flex-direction: column; gap: 3px; }
+.mem-list q { font-size: 13px; color: var(--muted); font-style: italic; }
+.mem-list small { font-size: 11px; color: var(--muted); }
+.mem-col h4 .hint { text-transform: none; letter-spacing: 0; }
+.bubble .now { margin-top: 8px; font-size: 12px; color: var(--muted); font-style: normal; letter-spacing: .02em; }
+.msg-tools time.story { color: var(--text); opacity: .7; }
+.clock-panel { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.clock-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.clock-panel input { background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px; font: inherit; font-size: 14px; color-scheme: dark; }
+.clock-panel input[type=number] { width: 64px; }
+.clock-panel .row { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.chat-head .clock { white-space: nowrap; }
+.msg-tools time { white-space: nowrap; }
+.msg-tools button { white-space: nowrap; }
+.msg-tools { flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .chat-head { flex-wrap: wrap; gap: 8px; }
+  .chat-head .grow { flex-basis: calc(100% - 60px); }
+  .chat-head .grow p { display: none; }
+  .chat-head .btn.small { padding: 6px 10px; font-size: 13px; }
+}

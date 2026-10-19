@@ -8,8 +8,10 @@ handler, so it shares the proxy's queue, retries and usage logging.
 import asyncio
 import json
 import os
+import re
 import secrets
 import time
+from datetime import datetime, timedelta
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -37,6 +39,11 @@ MAX_HISTORY_CHARS = 12_000
 # capture, compress, re-inject).
 COMPACT_EVERY = 8
 MAX_MEMORIES_IN_PROMPT = 25
+# Exact recall: verbatim earlier lines (this scene and the character's other
+# scenes) that match the new message are put back in front of the model, so
+# details are quoted rather than paraphrased from a summary.
+RECALL_LINES = 6
+RECALL_CHARS = 3_000
 # How much of the current chapter the writing tools see.
 CHAPTER_CONTEXT_CHARS = 8_000
 
@@ -108,6 +115,11 @@ CREATE TABLE IF NOT EXISTS memories (
     character_id INTEGER NOT NULL,
     content TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'auto',        -- auto | user
+    conversation_id INTEGER,                    -- auto: the scene it came from
+    message_id INTEGER,                         -- auto: the message that proves it
+    quote TEXT NOT NULL DEFAULT '',             -- auto: exact words from that message
+    said_at REAL,                               -- when that message was sent
+    story_time TEXT NOT NULL DEFAULT '',        -- story-time mark in force then
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_memories_char ON memories(character_id, id);
@@ -115,8 +127,9 @@ CREATE INDEX IF NOT EXISTS idx_memories_char ON memories(character_id, id);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL,
-    role TEXT NOT NULL,               -- user | assistant
+    role TEXT NOT NULL,               -- user | assistant | mark (story-time mark)
     content TEXT NOT NULL,
+    story_at TEXT NOT NULL DEFAULT '', -- in-universe clock at this message (ISO, no zone)
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, id);
@@ -206,6 +219,30 @@ ASSIST_MODES = {
 }
 ASSIST_LENGTH = {"short": 350, "medium": 750, "long": 1400}
 
+# In-universe clock. The model only estimates how long each exchange takes and
+# reports it in a [Time passed: ...] tag; the app does the clock arithmetic,
+# strips the tag, and stamps every message with the resulting time, so the clock
+# stays consistent through regenerates and rewinds.
+DEFAULT_MINUTES = 3
+MAX_SKIP_MINUTES = 7 * 24 * 60
+TIME_RULES = """[TIME MANAGEMENT PROTOCOL]
+The current in-universe time is given above, and the app shows it after every reply. Before writing, work out how
+much in-universe time the user's action and your reply take together, using these rules:
+- Standard dialogue, texting or a minor action: 1 to 5 minutes (casual back-and-forth is 1 to 3 minutes).
+- Short-distance driving (city, errands): 1.5 minutes per mile. Long-distance driving (highway): 1 minute per mile.
+- Power nap: 20 to 30 minutes. Full sleep or overnight: 6 to 8 hours.
+- Intimacy, foreplay or mild (flirting, making out, building tension): 15 to 30 minutes.
+- Intimacy, full sexual acts including the cool-down after: 30 to 60 minutes.
+- Quick snack or coffee: 5 to 10 minutes. Sit-down dinner or cooking a full meal: 45 to 90 minutes.
+If hours pass (sleep, a long drive), describe the transition in the narrative. Keep time consistent: a character who
+falls asleep at 11:00 PM for 8 hours wakes at 7:00 AM. Never contradict the current time (daylight, meals, how late
+it is). End every reply with one final line, exactly like [Time passed: 4 minutes] or [Time passed: 7 hours 30
+minutes], and do not write the current time yourself."""
+
+_TIME_TAG = re.compile(r"\[\s*(?:time passed|elapsed time|current time)\s*:[^\]]*\]", re.IGNORECASE)
+_PASSED = re.compile(r"\[\s*(?:time passed|elapsed time)\s*:([^\]]*)\]", re.IGNORECASE)
+_UNITS = re.compile(r"(\d+(?:\.\d+)?)\s*(days?|d\b|hours?|hrs?|h\b|minutes?|mins?|m\b)", re.IGNORECASE)
+
 
 async def init_studio_db(db_path: str):
     async with aiosqlite.connect(db_path) as db:
@@ -217,6 +254,15 @@ async def init_studio_db(db_path: str):
         if "summary" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
             await db.execute("ALTER TABLE conversations ADD COLUMN summarized_upto INTEGER NOT NULL DEFAULT 0")
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(messages)")).fetchall()]
+        if "story_at" not in cols:
+            await db.execute("ALTER TABLE messages ADD COLUMN story_at TEXT NOT NULL DEFAULT ''")
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(memories)")).fetchall()]
+        for col, kind in (("conversation_id", "INTEGER"), ("message_id", "INTEGER"),
+                          ("quote", "TEXT NOT NULL DEFAULT ''"), ("said_at", "REAL"),
+                          ("story_time", "TEXT NOT NULL DEFAULT ''")):
+            if col not in cols:
+                await db.execute(f"ALTER TABLE memories ADD COLUMN {col} {kind}")
         await db.commit()
         n = (await (await db.execute("SELECT COUNT(*) FROM characters")).fetchone())[0]
         if n == 0:
@@ -345,8 +391,115 @@ def _history_window(history: list[dict]) -> list[dict]:
         chars += len(m["content"])
         if chars > MAX_HISTORY_CHARS and out:
             break
-        out.append({"role": m["role"], "content": m["content"]})
+        out.append({"role": m["role"], "content": m["content"], "story_at": m.get("story_at", "")})
     return list(reversed(out))
+
+
+def _chat_turns(window: list[dict]) -> list[dict]:
+    """Turn a history window into chat messages: story-time marks become a note on
+    the user's side, and same-role neighbours are merged, since some chat templates
+    (Mistral's) require user and assistant turns to alternate."""
+    out = []
+    for m in window:
+        role, content = m["role"], m["content"]
+        if role == "mark":
+            role, content = "user", f"[Story time: {content}" + (
+                f" | now {_clock_text(m['story_at'])}]" if m.get("story_at") else "]")
+        elif role == "assistant" and m.get("story_at"):
+            content += f"\n[Current Time: {_clock_text(m['story_at'])}]"
+        if out and out[-1]["role"] == role:
+            out[-1]["content"] += "\n\n" + content
+        else:
+            out.append({"role": role, "content": content})
+    return out
+
+
+def _clock_text(iso: str) -> str:
+    """In-universe time as shown in scenes: Fri Oct 18, 11:40 PM."""
+    if not iso:
+        return ""
+    d = datetime.fromisoformat(iso)
+    return d.strftime("%a %b %d, ") + d.strftime("%I:%M %p").lstrip("0")
+
+
+def _iso(d: datetime) -> str:
+    return d.replace(second=0, microsecond=0).isoformat(timespec="minutes")
+
+
+def _elapsed(reply: str) -> tuple[str, int]:
+    """Strip the time tags from a reply; return the clean text and the minutes that passed."""
+    minutes = None
+    tag = _PASSED.findall(reply)
+    if tag:
+        total = 0.0
+        for n, unit in _UNITS.findall(tag[-1]):
+            u = unit.lower()[0]
+            total += float(n) * (1440 if u == "d" else 60 if u == "h" else 1)
+        minutes = round(total) if _UNITS.search(tag[-1]) else None
+    clean = _TIME_TAG.sub("", reply).rstrip()
+    if minutes is None:
+        minutes = DEFAULT_MINUTES
+    return clean or reply, max(0, min(minutes, MAX_SKIP_MINUTES))
+
+
+async def _scene_clock(cv: dict) -> datetime:
+    """The scene's in-universe time: the stamp on its latest message, or when the scene started."""
+    last = await _row("SELECT story_at FROM messages WHERE conversation_id = ? AND story_at != '' "
+                      "ORDER BY id DESC LIMIT 1", (cv["id"],))
+    if last:
+        return datetime.fromisoformat(last["story_at"])
+    return datetime.fromtimestamp(cv["created_at"]).replace(second=0, microsecond=0)
+
+
+def _stamp(ts: float | None) -> str:
+    """A time mark as people write it, in the computer's local time: Oct 18, 2026 9:04 PM."""
+    if not ts:
+        return ""
+    d = datetime.fromtimestamp(ts)
+    return d.strftime("%b %d, %Y ") + d.strftime("%I:%M %p").lstrip("0")
+
+
+def _norm(text: str) -> str:
+    """Normalize text for exact-quote checks: case, curly quotes, asterisks, spacing."""
+    text = text.lower().translate(str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+                                                 "\u2014": "-", "\u2013": "-", "*": " ", "_": " "}))
+    return re.sub(r"\s+", " ", text).strip(" .,!?\"'")
+
+
+_STOP = set("""a an and are as at be been but by can could did do does for from had has have he her hers him his how i
+if in into is it its just me my no not now of on or our out she so than that the their them then there they this
+to too up us was we were what when where which who why will with would you your yours i'm i'll it's don't""".split())
+
+
+def _keywords(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9']{3,}", text.lower()) if w not in _STOP}
+
+
+async def _recall(c: dict, conv_id: int, older_ids_below: int, query: str, username: str) -> list[dict]:
+    """Verbatim earlier messages that best match the new message: from this scene
+    (before the context window) and from the character's other scenes."""
+    words = _keywords(query)
+    if not words:
+        return []
+    rows = await _rows(
+        """SELECT m.id, m.conversation_id, m.role, m.content, m.story_at, m.created_at FROM messages m
+           JOIN conversations cv ON cv.id = m.conversation_id
+           WHERE cv.character_id = ? AND m.role IN ('user', 'assistant')
+             AND (m.conversation_id != ? OR m.id < ?)""", (c["id"], conv_id, older_ids_below))
+    scored = []
+    for m in rows:
+        hits = words & _keywords(m["content"])
+        if len(hits) >= min(2, len(words)):
+            scored.append((len(hits), m["id"], m))
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    picked, chars = [], 0
+    for _, _, m in scored[:RECALL_LINES]:
+        text = m["content"] if len(m["content"]) <= 600 else m["content"][:600] + "..."
+        chars += len(text)
+        if chars > RECALL_CHARS and picked:
+            break
+        picked.append({**m, "content": text, "who": c["name"] if m["role"] == "assistant" else username})
+    return sorted(picked, key=lambda m: m["id"])
 
 
 def _character_fields(body: dict) -> dict:
@@ -478,55 +631,123 @@ def _parse_memory_json(text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _transcript(msgs: list[dict], name: str, username: str) -> tuple[str, dict[int, str]]:
+    """Numbered, time-marked transcript lines, plus the story time in force at each message."""
+    lines, story, story_at = [], "", {}
+    for m in msgs:
+        stamp = _stamp(m["created_at"])
+        if m.get("story_at"):
+            story = _clock_text(m["story_at"])
+            stamp += f" | story time {story}"
+        if m["role"] == "mark":
+            story = f"{m['content']}, {story}" if m.get("story_at") else m["content"]
+            lines.append(f"[#{m['id']} | {stamp}] --- Story time: {m['content']} ---")
+        else:
+            who = name if m["role"] == "assistant" else username
+            lines.append(f"[#{m['id']} | {stamp}] {who}: {m['content']}")
+        story_at[m["id"]] = story
+    return "\n".join(lines), story_at
+
+
+def _check_memory(item, older: list[dict]) -> tuple[str, dict, str] | None:
+    """Keep a proposed memory only if its quote is found word for word in the
+    transcript. Returns (fact, source message, quote) or None."""
+    if not isinstance(item, dict):
+        return None
+    fact = str(item.get("fact") or "").strip()[:300]
+    quote = str(item.get("quote") or "").strip()[:300]
+    nq = _norm(quote)
+    if not fact or len(nq) < 8:
+        return None
+    try:
+        claimed = int(str(item.get("msg") or "").lstrip("#"))
+    except ValueError:
+        claimed = 0
+    by_id = {m["id"]: m for m in older if m["role"] != "mark"}
+    candidates = ([by_id[claimed]] if claimed in by_id else []) + list(by_id.values())
+    for m in candidates:
+        if nq in _norm(m["content"]):
+            # Store the words as they were written, not the model's copy of them.
+            words = re.findall(r"[\w']+", quote)
+            exact = re.search(r"[^\w']+".join(re.escape(w) for w in words), m["content"], re.IGNORECASE) if words else None
+            return fact, m, exact.group(0) if exact else quote
+    return None
+
+
 async def compact_conversation(conv_id: int, user_id: int, username: str):
     """Fold messages that fell out of the context window into the scene summary,
-    and save new lasting facts as character memories."""
+    and save new lasting facts as character memories. Every memory must quote the
+    message it comes from word for word, or it is thrown away."""
     cv = await _row("SELECT * FROM conversations WHERE id = ?", (conv_id,))
     if not cv:
         return
     c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
-    history = await _rows("SELECT id, role, content FROM messages WHERE conversation_id = ? ORDER BY id", (conv_id,))
+    history = await _rows("SELECT id, role, content, story_at, created_at FROM messages WHERE conversation_id = ? "
+                          "ORDER BY id", (conv_id,))
     in_window = len(_history_window(history))
     older = [m for m in history[:len(history) - in_window] if m["id"] > cv["summarized_upto"]]
     if len(older) < COMPACT_EVERY:
         return
     known = [m["content"] for m in await _rows("SELECT content FROM memories WHERE character_id = ? ORDER BY id",
                                                 (c["id"],))]
-    transcript = "\n".join(f"{c['name'] if m['role'] == 'assistant' else username}: {m['content']}" for m in older)
+    transcript, story_at = _transcript(older, c["name"], username)
+    while len(transcript) > 16000 and len(older) > COMPACT_EVERY:
+        older = older[:len(older) * 3 // 4]  # fold the rest on the next pass instead of truncating it
+        transcript, story_at = _transcript(older, c["name"], username)
     messages = [
         {"role": "system", "content":
-            "You keep continuity notes for an ongoing role-play. Reply with JSON only, in this shape: "
-            '{"summary": "...", "memories": ["...", "..."]}. "summary" is the updated story so far in 4 to 8 '
-            "sentences: key events, how the relationship has changed, unresolved threads, where the scene is now. "
-            f'"memories" lists up to 5 NEW lasting facts {c["name"]} would remember about {username} or their '
-            "relationship (names, preferences, secrets, promises, turning points), one short sentence each, "
-            "leaving out anything already in the known memories."},
+            "You keep exact continuity notes for an ongoing role-play. Use only what the transcript and the story "
+            "so far actually say: never guess, embellish, merge characters or change who said or did what. "
+            "Each transcript line starts with [#message id | date and time]. Reply with JSON only, in this shape: "
+            '{"summary": "...", "memories": [{"fact": "...", "quote": "...", "msg": 123}]}. '
+            '"summary" is the updated story so far: the earlier summary followed by the new events, in order, one '
+            "short line per event, each starting with its time mark in brackets, like [Oct 18, 2026 9:04 PM] or, "
+            "its in-universe story time, like [Fri Oct 18, 11:40 PM]. Keep names, numbers, places and promises "
+            f'exactly as written. "memories" lists up to 5 NEW lasting facts {c["name"]} would remember about '
+            f"{username} or their relationship (names, preferences, secrets, promises, turning points). For each, "
+            '"fact" is one short sentence, "quote" is the exact words copied from the transcript that prove it '
+            '(at least a few words, copied character for character), and "msg" is that line\'s message id. '
+            "Leave out anything already in the known memories, and anything you cannot quote."},
         {"role": "user", "content":
             f"Story so far:\n{cv['summary'] or '(nothing yet)'}\n\nKnown memories:\n"
             + ("\n".join(f"- {k}" for k in known) or "(none)")
-            + f"\n\nNew part of the transcript:\n{transcript[-16000:]}"},
+            + f"\n\nNew part of the transcript:\n{transcript}"},
     ]
     try:
-        data = _parse_memory_json(await _complete(user_id, messages, 0.3, 700))
+        data = _parse_memory_json(await _complete(user_id, messages, 0.1, 1200))
     except Exception:
         return
     if not data:
         return
-    summary = str(data.get("summary") or "").strip()[:4000]
+    summary = str(data.get("summary") or "").strip()[:6000]
+    # Re-read before writing: a rewind while the model was working invalidates this pass.
+    still = await _row("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND id BETWEEN ? AND ?",
+                       (conv_id, older[0]["id"], older[-1]["id"]))
+    if not still or still["n"] != len(older):
+        return
     now = time.time()
     await _exec("UPDATE conversations SET summary = ?, summarized_upto = ? WHERE id = ?",
                 (summary or cv["summary"], older[-1]["id"], conv_id))
-    for mem in (data.get("memories") or [])[:5]:
-        mem = str(mem).strip()[:300]
-        if mem and mem not in known and not mentions_minor(mem):
-            await _exec("INSERT INTO memories (character_id, content, source, created_at) VALUES (?,?,?,?)",
-                        (c["id"], mem, "auto", now))
+    seen = {_norm(k) for k in known}
+    for item in (data.get("memories") or [])[:5]:
+        checked = _check_memory(item, older)
+        if not checked:
+            continue
+        fact, src, quote = checked
+        if _norm(fact) in seen or mentions_minor(fact):
+            continue
+        seen.add(_norm(fact))
+        await _exec("""INSERT INTO memories (character_id, content, source, conversation_id, message_id, quote,
+                       said_at, story_time, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (c["id"], fact, "auto", conv_id, src["id"], quote, src["created_at"],
+                     story_at.get(src["id"], ""), now))
 
 
 @router.get("/characters/{cid}/memories")
 async def list_memories(cid: int, s: dict = Depends(_session)):
-    return JSONResponse(await _rows("SELECT id, content, source, created_at FROM memories WHERE character_id = ? "
-                                    "ORDER BY id DESC", (cid,)))
+    return JSONResponse(await _rows("SELECT id, content, source, conversation_id, message_id, quote, said_at, "
+                                    "story_time, created_at FROM memories WHERE character_id = ? "
+                                    "ORDER BY COALESCE(said_at, created_at) DESC, id DESC", (cid,)))
 
 
 @router.post("/characters/{cid}/memories")
@@ -593,10 +814,14 @@ async def start_conversation(request: Request, s: dict = Depends(_session)):
         if existing:
             return JSONResponse({"id": existing["id"]})
     now = time.time()
+    try:
+        start = datetime.fromisoformat(str(body["story_start"])) if body.get("story_start") else datetime.now()
+    except ValueError:
+        return _err(400, "That story start time isn't a valid date and time.")
     cv = await _exec("INSERT INTO conversations (character_id, novel_id, created_at, updated_at) VALUES (?,?,?,?)",
                      (c["id"], novel_id, now, now))
-    await _exec("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?,?,?,?)",
-                (cv, "assistant", c["greeting"], now))
+    await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                (cv, "assistant", c["greeting"], _iso(start), now))
     return JSONResponse({"id": cv})
 
 
@@ -607,8 +832,11 @@ async def get_conversation(conv_id: int, s: dict = Depends(_session)):
         return _err(404, "Chat not found")
     c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
     novel = await _row("SELECT id, title FROM novels WHERE id = ?", (cv["novel_id"],)) if cv["novel_id"] else None
-    msgs = await _rows("SELECT id, role, content FROM messages WHERE conversation_id = ? ORDER BY id", (conv_id,))
-    return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs, "summary": cv["summary"]})
+    msgs = await _rows("SELECT id, role, content, story_at, created_at FROM messages WHERE conversation_id = ? "
+                       "ORDER BY id", (conv_id,))
+    upto = next((m["created_at"] for m in msgs if m["id"] == cv["summarized_upto"]), None)
+    return JSONResponse({"id": conv_id, "character": c, "novel": novel, "messages": msgs, "summary": cv["summary"],
+                         "summary_upto": upto, "clock": _iso(await _scene_clock(cv))})
 
 
 @router.delete("/conversations/{conv_id}")
@@ -627,9 +855,54 @@ async def delete_message(msg_id: int, s: dict = Depends(_session)):
     if not m:
         return _err(404, "Message not found")
     await _exec("DELETE FROM messages WHERE conversation_id = ? AND id >= ?", (m["conversation_id"], msg_id))
+    # Facts learned from rewound messages never happened.
+    await _exec("DELETE FROM memories WHERE source = 'auto' AND conversation_id = ? AND message_id >= ?",
+                (m["conversation_id"], msg_id))
     # Rewinding past summarized messages invalidates the scene summary.
     await _exec("UPDATE conversations SET summary = '', summarized_upto = 0 WHERE id = ? AND summarized_upto >= ?",
                 (m["conversation_id"], msg_id))
+    return JSONResponse({"ok": True})
+
+
+@router.post("/conversations/{conv_id}/marks")
+async def add_mark(conv_id: int, request: Request, s: dict = Depends(_session)):
+    """Add a story-time mark to a scene: set the in-universe clock ("set": an ISO date
+    and time), skip it ahead ("skip_minutes"), or just label the moment ("story_time")."""
+    body = await request.json()
+    text = str(body.get("story_time") or "").strip()[:120]
+    if mentions_minor(text):
+        return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
+    cv = await _row("SELECT * FROM conversations WHERE id = ?", (conv_id,))
+    if not cv:
+        return _err(404, "Chat not found")
+    if not (text or body.get("set") or body.get("skip_minutes")):
+        return _err(400, "Set a time, a skip or a label first.")
+    clock = await _scene_clock(cv)
+    try:
+        if body.get("set"):
+            clock = datetime.fromisoformat(str(body["set"]))
+        skip = int(float(body.get("skip_minutes") or 0))
+    except ValueError:
+        return _err(400, "That isn't a valid date, time or number of minutes.")
+    if not 0 <= skip <= MAX_SKIP_MINUTES * 4:
+        return _err(400, "Skip ahead by up to four weeks at a time.")
+    clock += timedelta(minutes=skip)
+    if not text:
+        if skip:
+            h, m = divmod(skip, 60)
+            text = "Time skip: " + " ".join(p for p in (f"{h} hours" if h else "", f"{m} minutes" if m else "") if p)
+        else:
+            text = "Clock set"  # a "set" with no label
+    now = time.time()
+    mid = await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                      (conv_id, "mark", text, _iso(clock), now))
+    await _exec("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id))
+    return JSONResponse({"id": mid, "role": "mark", "content": text, "story_at": _iso(clock), "created_at": now})
+
+
+@router.delete("/marks/{msg_id}")
+async def delete_mark(msg_id: int, s: dict = Depends(_session)):
+    await _exec("DELETE FROM messages WHERE id = ? AND role = 'mark'", (msg_id,))
     return JSONResponse({"ok": True})
 
 
@@ -642,15 +915,16 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         return _err(404, "Chat not found")
     c = await _row("SELECT * FROM characters WHERE id = ?", (cv["character_id"],))
     now = time.time()
+    clock = await _scene_clock(cv)
 
     if text:  # an empty message means "regenerate the reply to the last message"
         if mentions_minor(text):
             return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
-        await _exec("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?,?,?,?)",
-                    (conv_id, "user", text, now))
+        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                    (conv_id, "user", text, _iso(clock), now))
         if is_crisis(text):
-            await _exec("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?,?,?,?)",
-                        (conv_id, "assistant", CRISIS_RESPONSE, now))
+            await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) "
+                        "VALUES (?,?,?,?,?)", (conv_id, "assistant", CRISIS_RESPONSE, _iso(clock), now))
             return JSONResponse({"crisis": True, "content": CRISIS_RESPONSE})
     await _exec("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id))
 
@@ -665,21 +939,42 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         novel, cast = await _novel_with_cast(cv["novel_id"])
         if novel:
             system += "\nThis role-play is a scene for the user's novel. Story bible:\n" + _bible(novel, cast) + "\n"
-    mems = await _rows("SELECT content FROM memories WHERE character_id = ? ORDER BY id DESC LIMIT ?",
-                       (c["id"], MAX_MEMORIES_IN_PROMPT))
+    # User-written memories always go in; the newest automatic ones fill the rest.
+    mems = await _rows("""SELECT * FROM (SELECT content, said_at, story_time, created_at, source, id FROM memories
+                          WHERE character_id = ? ORDER BY source = 'user' DESC, id DESC LIMIT ?)
+                          ORDER BY COALESCE(said_at, created_at), id""", (c["id"], MAX_MEMORIES_IN_PROMPT))
     if mems:
-        system += (f"\nThings {c['name']} remembers from earlier scenes with {s['username']}:\n"
-                   + "\n".join(f"- {m['content']}" for m in reversed(mems)) + "\n")
+        system += (f"\nThings {c['name']} remembers about {s['username']}, oldest first. These are facts:\n"
+                   + "\n".join(f"- [{_stamp(m['said_at'] or m['created_at'])}"
+                                + (f" | story time: {m['story_time']}" if m["story_time"] else "")
+                                + f"] {m['content']}" for m in mems) + "\n")
     if cv["summary"]:
-        system += f"\nThis scene so far (earlier messages, summarized):\n{cv['summary']}\n"
-    system += "\n" + SAFETY_RULES
+        system += f"\nThis scene so far (earlier messages, summarized in order):\n{cv['summary']}\n"
 
-    history = await _rows("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id", (conv_id,))
-    messages = [{"role": "system", "content": system}] + _history_window(history)
+    history = await _rows("SELECT id, role, content, story_at, created_at FROM messages WHERE conversation_id = ? "
+                          "ORDER BY id", (conv_id,))
+    window = _history_window(history)
+    first_in_window = history[len(history) - len(window)]["id"] if window else 0
+    recalled = await _recall(c, conv_id, first_in_window, text or (history[-1]["content"] if history else ""),
+                             s["username"])
+    if recalled:
+        system += ("\nExact lines from earlier, word for word, with when they were said:\n"
+                   + "\n".join(f"[{_stamp(m['created_at'])}"
+                                + (f" | story time {_clock_text(m['story_at'])}" if m["story_at"] else "")
+                                + f"] {m['who']}: {m['content']}" for m in recalled) + "\n")
+    marks = [m for m in history if m["role"] == "mark"]
+    system += (f"\nCurrent in-universe time: {_clock_text(_iso(clock))}"
+               + (f" (latest story mark: {marks[-1]['content']})" if marks else "") + "\n\n" + TIME_RULES + "\n")
+    system += (f"\nContinuity: keep every detail consistent with the memories, summary and exact lines above "
+               "(names, dates, places, promises, who did what). Never invent past events that aren't there; if "
+               f"{c['name']} isn't sure, they stay vague instead of making it up.\n\n" + SAFETY_RULES)
+
+    messages = [{"role": "system", "content": system}] + _chat_turns(window)
 
     async def save(reply):
-        await _exec("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?,?,?,?)",
-                    (conv_id, "assistant", reply, time.time()))
+        reply, minutes = _elapsed(reply)
+        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                    (conv_id, "assistant", reply, _iso(clock + timedelta(minutes=minutes)), time.time()))
         asyncio.create_task(compact_conversation(conv_id, s["user_id"], s["username"]))
 
     model = body.get("model_id") or DEFAULT_MODEL

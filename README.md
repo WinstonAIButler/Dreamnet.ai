@@ -27,6 +27,20 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   promises, secrets, turning points) are saved to the character's memory, which
   every later scene with them reads. Both are visible and editable from the
   **Memory** button in a scene.
+- **Exact memory.** A memory is only saved when the model can quote, word for
+  word, the line in the scene that proves it; anything it can't quote is thrown
+  away. Each memory shows that quote and when it was said. Rewinding a scene
+  forgets what the rewound messages taught. Before every reply, the earlier
+  lines that match what you just wrote (from this scene and the character's
+  other scenes) are put back in front of the model verbatim.
+- **Time marks and an in-story clock.** Every message shows when you wrote it,
+  and every reply ends with the in-story time, like [Current Time: Sat 11:16 AM].
+  The model estimates how long each exchange takes using built-in rules
+  (1 to 5 minutes for talk, 1.5 minutes per mile in the city, 6 to 8 hours for
+  sleep, 45 to 90 minutes for dinner, and so on) and the app does the clock
+  math, so time stays consistent through regenerates and rewinds. Use the clock
+  button in a scene to set the time, skip ahead or label a moment ("The next
+  morning, his penthouse").
 - **Lifelike portraits.** One click turns a character card into a photorealistic
   portrait, using the Z-Image-Turbo workflow from Intel AI Playground on your
   own ComfyUI.

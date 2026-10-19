@@ -110,6 +110,30 @@
     return Math.floor(s / 86400) + "d ago";
   }
 
+  // Time marks: "9:04 PM", "Oct 18, 2026 9:04 PM", and a day heading for chats.
+  function clock(ts) {
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  function stamp(ts) {
+    if (!ts) return "";
+    return new Date(ts * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) + " " + clock(ts);
+  }
+  // In-universe clock, stored as "2026-10-18T23:40" (no time zone).
+  function storyClock(iso, full) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    var t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return full ? d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + ", " + t
+      : d.toLocaleDateString([], { weekday: "short" }) + " " + t;
+  }
+  function stripTimeTags(text, typing) {
+    text = String(text || "").replace(/\[\s*(time passed|elapsed time|current time)\s*:[^\]]*\]/gi, "");
+    return (typing ? text.replace(/\[[^\]]*$/, "") : text).replace(/\s+$/, "");
+  }
+  function dayLabel(ts) {
+    return new Date(ts * 1000).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  }
+
   function setNav(name) {
     document.querySelectorAll("[data-nav]").forEach(function (a) {
       a.classList.toggle("active", a.getAttribute("data-nav") === name);
@@ -365,10 +389,17 @@
         '<section class="chat">' +
         '<div class="chat-head">' + avatar(c) + '<div class="grow"><b>' + esc(c.name) + "</b><p>" +
         (conv.novel ? "Scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : esc(c.tagline)) + "</p></div>" +
+        '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">🕒 <span id="clockNow"></span></button>' +
         '<button class="btn small" id="memBtn" title="What ' + esc(c.name) + ' remembers">Memory</button>' +
         '<button class="btn small" id="newScene" title="Start over with the opening line">New scene</button>' +
         '<button class="btn small ghost" id="delConv" title="Delete this scene">🗑</button></div>' +
         '<div class="memory-panel" id="memPanel" hidden></div>' +
+        '<form class="clock-panel" id="clockPanel" hidden>' +
+        '<label>Set the clock to<input type="datetime-local" id="clockSet"></label>' +
+        '<label>or skip ahead<span class="row"><input type="number" id="skipH" min="0" max="672" placeholder="0"> h ' +
+        '<input type="number" id="skipM" min="0" max="59" placeholder="0"> min</span></label>' +
+        '<label class="grow">Label (optional)<input id="clockLabel" maxlength="120" placeholder="The next morning, his penthouse"></label>' +
+        '<button class="btn small primary">Mark time</button></form>' +
         '<div class="messages" id="msgs"></div>' +
         '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Write your reply. Use *asterisks* for actions."></textarea>' +
         '<button class="btn primary" id="sendBtn">Send</button></form>' +
@@ -380,12 +411,27 @@
       var sendBtn = document.getElementById("sendBtn");
       var list = conv.messages.slice();
 
+      function currentClock() {
+        for (var j = list.length - 1; j >= 0; j--) if (list[j].story_at) return list[j].story_at;
+        return conv.clock;
+      }
       function render() {
+        var lastDay = "";
+        document.getElementById("clockNow").textContent = storyClock(currentClock(), true);
         msgs.innerHTML = list.map(function (m, i) {
           var isLast = i === list.length - 1;
-          return '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
-            '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(m.content) + "</div>" +
-            (m.id && !m.typing ? '<div class="msg-tools">' +
+          var ts = m.created_at || Date.now() / 1000;
+          var day = dayLabel(ts), head = "";
+          if (day !== lastDay) { head = '<div class="day-mark"><span>' + esc(day) + "</span></div>"; lastDay = day; }
+          if (m.role === "mark") {
+            return head + '<div class="story-mark"><span>⏱ ' + esc(m.content) + (m.story_at ? " · " + esc(storyClock(m.story_at, true)) : "") +
+              '</span><time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + '</time><button data-delmark="' + m.id + '" title="Remove this time mark">×</button></div>';
+          }
+          return head + '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
+            '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
+            (m.role === "assistant" && m.story_at ? '<div class="now">[Current Time: ' + esc(storyClock(m.story_at)) + "]</div>" : "") + "</div>" +
+            (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at)) + "</time>" : "") +
+              '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time>" +
               (m.role === "assistant" && isLast && i > 0 ? '<button data-regen="' + m.id + '">↻ Regenerate</button>' : "") +
               (conv.novel && m.role === "assistant" ? '<button data-tochapter="' + i + '">＋ Add to chapter</button>' : "") +
               (i > 0 ? '<button data-rewind="' + m.id + '">Rewind to here</button>' : "") + "</div>" : "") +
@@ -397,7 +443,7 @@
 
       function send(text) {
         sendBtn.disabled = true;
-        if (text) list.push({ role: "user", content: text });
+        if (text) list.push({ role: "user", content: text, created_at: Date.now() / 1000 });
         var pending = { role: "assistant", content: "", typing: true };
         list.push(pending);
         render();
@@ -436,22 +482,46 @@
           api("/app/api/messages/" + b.dataset.rewind, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id < +b.dataset.rewind; }); render();
           });
+        } else if (b.dataset.delmark) {
+          api("/app/api/marks/" + b.dataset.delmark, { method: "DELETE" }).then(function () {
+            list = list.filter(function (m) { return m.id !== +b.dataset.delmark; }); render();
+          });
         } else if (b.dataset.tochapter) {
           addToChapter(conv.novel.id, list[+b.dataset.tochapter].content);
         }
+      };
+      var clockPanel = document.getElementById("clockPanel");
+      document.getElementById("clockBtn").onclick = function () {
+        clockPanel.hidden = !clockPanel.hidden;
+        if (!clockPanel.hidden) document.getElementById("clockSet").value = currentClock().slice(0, 16);
+      };
+      clockPanel.onsubmit = function (e) {
+        e.preventDefault();
+        var set = document.getElementById("clockSet").value;
+        var skip = (+document.getElementById("skipH").value || 0) * 60 + (+document.getElementById("skipM").value || 0);
+        var body = { story_time: document.getElementById("clockLabel").value.trim(), skip_minutes: skip };
+        if (set && set !== currentClock().slice(0, 16)) body.set = set;
+        if (!body.set && !skip && !body.story_time) { toast("Set a time, a skip or a label first.", true); return; }
+        api("/app/api/conversations/" + convId + "/marks", { method: "POST", body: body })
+          .then(function (m) { list.push(m); clockPanel.hidden = true; clockPanel.reset(); render(); })
+          .catch(function (err) { toast(err.message, true); });
       };
       var memPanel = document.getElementById("memPanel");
       function loadMemory() {
         Promise.all([api("/app/api/characters/" + c.id + "/memories"), api("/app/api/conversations/" + convId)]).then(function (r) {
           var mems = r[0], fresh = r[1];
           memPanel.innerHTML =
-            '<div class="mem-col"><h4>This scene so far</h4>' +
+            '<div class="mem-col"><h4>This scene so far' + (fresh.summary_upto ? ' <span class="hint">up to ' + esc(stamp(fresh.summary_upto)) + "</span>" : "") + "</h4>" +
             '<textarea id="sumText" rows="5" placeholder="Filled in automatically once the scene gets long. You can edit it.">' + esc(fresh.summary) + "</textarea>" +
             '<button class="btn small" id="sumSave">Save summary</button></div>' +
             '<div class="mem-col"><h4>' + esc(c.name) + " remembers <span class=\"hint\">across every scene</span></h4>" +
             '<form class="row" id="memAdd"><input id="memText" placeholder="Add something they should never forget"><button class="btn small">Add</button></form>' +
             '<ul class="mem-list">' + (mems.map(function (m) {
-              return '<li><span>' + esc(m.content) + '</span><button data-delmem="' + m.id + '" title="Forget">×</button></li>';
+              var when = stamp(m.said_at || m.created_at) + (m.story_time ? " · story time: " + m.story_time : "");
+              return '<li><div class="grow"><span>' + esc(m.content) + "</span>" +
+                (m.quote ? '<q>' + esc(m.quote) + "</q>" : "") +
+                '<small>' + esc(when) + " · " + (m.source === "user" ? "added by you" : "from a scene") + "</small></div>" +
+                '<button data-delmem="' + m.id + '" title="Forget">×</button></li>';
             }).join("") || '<li class="muted">Nothing yet. Memories are added automatically as you play.</li>') + "</ul></div>";
           document.getElementById("sumSave").onclick = function () {
             api("/app/api/conversations/" + convId + "/summary", { method: "PUT", body: { summary: document.getElementById("sumText").value } })
