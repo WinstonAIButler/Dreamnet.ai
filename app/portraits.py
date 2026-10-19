@@ -28,6 +28,8 @@ ZIMAGE_VAE = os.getenv("ZIMAGE_VAE", "ae.safetensors")
 
 # 3:4 portrait at about 1 megapixel, from the preset's resolution table.
 WIDTH, HEIGHT = 896, 1152
+# Scene pictures are landscape, 3:2-ish at about 1 megapixel.
+SCENE_WIDTH, SCENE_HEIGHT = 1216, 832
 
 # AI Playground's Z-Image API workflow, with its AI Playground-only SafetyChecker
 # nodes removed so it runs on stock ComfyUI. Node ids and titles are unchanged.
@@ -69,6 +71,23 @@ PROMPT_INSTRUCTIONS = (
 )
 
 
+# For a picture of a roleplay moment: the current message is the action, and the
+# character details keep everyone looking the same from picture to picture.
+SCENE_INSTRUCTIONS = (
+    "Write one detailed image prompt for Z-Image-Turbo, a photorealistic image model, showing a single moment "
+    "from a story as a cinematic film still. The CURRENT MOMENT is what the picture shows: its action, poses, "
+    "expressions and where everyone is. Everything else (character details, earlier events, setting, time of "
+    "day) is only there to keep it accurate: each character's face, hair, eyes, build, skin, scars, tattoos, "
+    "piercings and clothing must match their details exactly, and the place, weather and light must fit the "
+    "story so far and the time of day. Name no one; describe each person by their looks so the image model can "
+    "draw them. Every person is an adult. Keep it tasteful: if the moment is intimate, show it through closeness, "
+    "touch, expressions, sheets or shadow, with no explicit nudity; violence can be tense but not gory. It must "
+    "look like a real photograph: natural skin texture, real light, 35mm or 50mm lens, cinematic colour grade, "
+    "shallow depth of field. Supernatural traits are subtle and realistic, never cartoon, anime, CGI or "
+    "illustration. Return only the prompt as one paragraph of at most 180 words, no preamble."
+)
+
+
 class PortraitError(Exception):
     pass
 
@@ -90,21 +109,23 @@ def template_prompt(c: dict) -> str:
     )
 
 
-def build_workflow(prompt: str, seed: int | None = None) -> dict:
+def build_workflow(prompt: str, seed: int | None = None, width: int = WIDTH, height: int = HEIGHT) -> dict:
     wf = copy.deepcopy(ZIMAGE_WORKFLOW)
+    wf["41"]["inputs"].update(width=width, height=height)
     wf["45"]["inputs"]["text"] = prompt
     wf["44"]["inputs"]["seed"] = seed if seed is not None else random.randint(0, 2**48)
     return wf
 
 
-async def generate(client: httpx.AsyncClient, prompt: str, seed: int | None = None) -> bytes:
+async def generate(client: httpx.AsyncClient, prompt: str, seed: int | None = None,
+                   width: int = WIDTH, height: int = HEIGHT) -> bytes:
     """Queue the workflow on ComfyUI, wait for it, and return the PNG bytes."""
     if not enabled():
         raise PortraitError("Portrait generation is off. Set COMFYUI_URL to your ComfyUI server.")
     client_id = secrets.token_hex(8)
     try:
         r = await client.post(f"{COMFYUI_URL}/prompt",
-                              json={"prompt": build_workflow(prompt, seed), "client_id": client_id}, timeout=30)
+                              json={"prompt": build_workflow(prompt, seed, width, height), "client_id": client_id}, timeout=30)
     except httpx.RequestError as e:
         raise PortraitError(f"Can't reach ComfyUI at {COMFYUI_URL}: {e}") from e
     if r.status_code != 200:
@@ -137,9 +158,9 @@ async def generate(client: httpx.AsyncClient, prompt: str, seed: int | None = No
     raise PortraitError("Timed out waiting for ComfyUI.")
 
 
-def save(character_id: int, png: bytes) -> str:
-    """Store a portrait and return the URL path the web app uses."""
+def save(character_id: int, png: bytes, kind: str = "character") -> str:
+    """Store a portrait (or a scene picture, kind="scene") and return the URL path the web app uses."""
     PORTRAIT_DIR.mkdir(parents=True, exist_ok=True)
-    name = f"character-{character_id}-{secrets.token_hex(4)}.png"
+    name = f"{kind}-{character_id}-{secrets.token_hex(4)}.png"
     (PORTRAIT_DIR / name).write_bytes(png)
     return f"/portraits/{name}"

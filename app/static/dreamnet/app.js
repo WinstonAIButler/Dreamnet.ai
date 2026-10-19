@@ -16,8 +16,269 @@
   }
 
   // Role-play text: *actions* in italics, everything else escaped.
+  // Roleplay text: "spoken words", *actions* and `thoughts` (or ((thoughts))) each get their own font and color.
+  var RP_PARTS = /(`[^`\n]+`|\(\([^\n]+?\)\)|\*[^*\n]+\*|"[^"\n]+"|\u201c[^\u201d\n]+\u201d)/g;
   function rp(s) {
-    return esc(s).replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    return String(s == null ? "" : s).split(RP_PARTS).map(function (part, i) {
+      if (i % 2 === 0) return esc(part);
+      var c = part.charAt(0);
+      if (c === "`") return '<span class="rp-thought">' + esc(part.slice(1, -1)) + "</span>";
+      if (c === "(") return '<span class="rp-thought">' + esc(part.slice(2, -2)) + "</span>";
+      if (c === "*") return '<em class="rp-action">' + esc(part.slice(1, -1)) + "</em>";
+      return '<span class="rp-speech">' + esc(part) + "</span>";
+    }).join("");
+  }
+
+  // ---------- read aloud ----------
+  // Neural voices come from the server (English voices by country); if it can't
+  // reach the online voice service, the device's own English voices are used.
+  var voiceInfo = null, player = null, onlineFailed = false, vsWarned = false;
+  function pref(k, d) { try { var v = localStorage.getItem("dn." + k); return v == null ? d : v; } catch (e) { return d; } }
+  function setPref(k, v) { try { localStorage.setItem("dn." + k, v); } catch (e) { /* private mode */ } }
+  function loadVoices() {
+    if (!voiceInfo) voiceInfo = api("/app/api/voices").catch(function () { return { enabled: false, regions: [], voices: [], tones: [], defaults: {} }; });
+    return voiceInfo;
+  }
+  function deviceVoices() {
+    return (window.speechSynthesis ? speechSynthesis.getVoices() : []).filter(function (v) { return /^en[-_]/i.test(v.lang); });
+  }
+  var TONE_PITCH = { deep: 0.75, low: 0.88, natural: 1, bright: 1.15 };
+  function speakableText(text, mode) {
+    text = stripTimeTags(text);
+    var out = [];
+    String(text).split(RP_PARTS).forEach(function (p, i) {
+      if (!p.trim()) return;
+      var c = p.charAt(0), kind = i % 2 === 0 ? "narration" : c === "`" || c === "(" ? "thought" : c === "*" ? "action" : "speech";
+      if (kind === "thought") p = p.replace(/^[`(]+|[`)]+$/g, "");
+      if (kind === "action") p = p.replace(/^\*|\*$/g, "");
+      if (mode === "words" && kind !== "speech") return;
+      if (mode === "words_thoughts" && kind !== "speech" && kind !== "thought") return;
+      out.push(p.trim());
+    });
+    return out.join(" ").replace(/\s+/g, " ").trim();
+  }
+  // Sound effects for accent presets, applied as the voice plays (online or VoiceStudio audio).
+  var actx = null;
+  function audioCtx() {
+    if (!actx) { var C = window.AudioContext || window.webkitAudioContext; if (C) actx = new C(); }
+    return actx;
+  }
+  function impulse(ctx, secs, decay) {  // a simple room: decaying noise
+    var len = Math.floor(ctx.sampleRate * secs), buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (var ch = 0; ch < 2; ch++) {
+      var d = buf.getChannelData(ch);
+      for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return buf;
+  }
+  function filter(ctx, type, freq, gain) {
+    var f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; if (gain) f.gain.value = gain; return f;
+  }
+  function grit(ctx, amount) {
+    var ws = ctx.createWaveShaper(), n = 1024, curve = new Float32Array(n);
+    for (var i = 0; i < n; i++) { var x = i * 2 / n - 1; curve[i] = (1 + amount) * x / (1 + amount * Math.abs(x)); }
+    ws.curve = curve; return ws;
+  }
+  var SOUND_FX = {  // [filters, grit, reverb seconds, reverb mix]
+    innocent: function (ctx) { return [[filter(ctx, "highshelf", 3500, 4)], 0, 0.8, 0.08]; },
+    mysterious: function (ctx) { return [[filter(ctx, "lowpass", 6000)], 0, 2.6, 0.35]; },
+    villain: function (ctx) { return [[filter(ctx, "lowshelf", 220, 6), ctx.createDynamicsCompressor()], 3, 1.2, 0.15]; },
+    possessed: function (ctx) { return [[filter(ctx, "lowshelf", 160, 8), filter(ctx, "lowpass", 5000)], 10, 3.2, 0.45]; }
+  };
+  function playAudio(blob, sound) {
+    var url = URL.createObjectURL(blob), a = new Audio(url), ctx = SOUND_FX[sound] ? audioCtx() : null;
+    if (!ctx) return a;
+    try {
+      if (ctx.state === "suspended") ctx.resume();
+      var fx = SOUND_FX[sound](ctx), head = ctx.createMediaElementSource(a);
+      var out = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain(), verb = ctx.createConvolver();
+      out.connect(ctx.destination); dry.connect(out); verb.connect(wet); wet.connect(out);
+      fx[0].forEach(function (n) { head.connect(n); head = n; });
+      if (fx[1]) { var g = grit(ctx, fx[1]); head.connect(g); head = g; }
+      verb.buffer = impulse(ctx, fx[2], 2.5); wet.gain.value = fx[3]; dry.gain.value = 1 - fx[3] / 2;
+      head.connect(dry); head.connect(verb);
+      if (sound === "possessed") {  // a second, slower and deeper copy of the voice dragging under the first
+        var b = new Audio(url);
+        b.preservesPitch = b.mozPreservesPitch = b.webkitPreservesPitch = false;
+        b.playbackRate = 0.9;
+        var g2 = ctx.createGain(); g2.gain.value = 0.55;
+        ctx.createMediaElementSource(b).connect(g2); g2.connect(verb); g2.connect(dry);
+        a.echo = b;
+        a.addEventListener("play", function () { b.play().catch(function () {}); });
+      }
+    } catch (e) { /* no effects on this browser; the plain voice still plays */ }
+    return a;
+  }
+  function stopSpeaking() {
+    if (player) { player.pause(); if (player.echo) player.echo.pause(); player = null; }
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    document.querySelectorAll("[data-listen].playing").forEach(function (b) { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
+  }
+  function voiceFor(c) {
+    return { voice: c.voice || "", tone: c.voice_tone || "natural", rate: +c.voice_rate || 0, gender: c.gender,
+      engine: c.voice_engine || "edge", profile: c.voice_profile || "", age: c.age, name: c.name, character_id: c.id,
+      style: parseStyle(c.voice_style) };
+  }
+  function parseStyle(raw) {
+    if (!raw) return null;
+    if (typeof raw === "object") return raw.accent ? raw : null;
+    try { var st = JSON.parse(raw); return st && st.accent ? st : null; } catch (e) { return null; }
+  }
+  // Speak text as a character's voice; resolves when it finishes.
+  function speak(text, v, onEnd) {
+    stopSpeaking();
+    var mode = pref("readMode", "all");
+    return loadVoices().then(function (info) {
+      var id = v.voice || (info.defaults || {})[v.gender] || "en-US-AvaNeural";
+      var studio = v.engine === "voicestudio";
+      if (!studio && (id.indexOf("device:") === 0 || !info.enabled || onlineFailed)) return speakOnDevice(speakableText(text, mode), id, v, onEnd);
+      return fetch("/app/api/tts", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, voice: id, tone: v.tone, rate: v.rate, mode: mode, engine: v.engine || "edge",
+          profile: v.profile || "", gender: v.gender, age: v.age, name: v.name, character_id: v.character_id, style: v.style || null }) })
+        .then(function (r) {
+          if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) { throw new Error(d.error || "Voice unavailable"); });
+          if (studio && r.headers.get("X-Voice-Fallback") && !vsWarned) {
+            vsWarned = true;
+            toast(r.headers.get("X-Voice-Fallback") + " Using the online voice instead.", true);
+          }
+          return r.blob();
+        })
+        .then(function (blob) {
+          var a = playAudio(blob, v.style && v.style.sound);
+          player = a;
+          a.onended = function () { if (player === a) player = null; if (onEnd) onEnd(); };
+          return a.play();
+        })
+        .catch(function (e) {
+          if (e.name === "NotAllowedError") { toast("Tap Listen to hear it; your browser blocked autoplay.", true); if (onEnd) onEnd(); return; }
+          if (!studio) onlineFailed = true;
+          toast((studio ? "Couldn't reach VoiceStudio or the online voices" : "Couldn't reach the online voices") + ", so this device's voice is reading instead.", true);
+          return speakOnDevice(speakableText(text, mode), id, v, onEnd);
+        });
+    });
+  }
+  function speakOnDevice(text, id, v, onEnd) {
+    if (!window.speechSynthesis || !text) { if (onEnd) onEnd(); return; }
+    var list = deviceVoices(), pick = null;
+    if (id.indexOf("device:") === 0) pick = list.filter(function (x) { return x.name === id.slice(7); })[0];
+    if (!pick) {
+      var lang = id.slice(0, 5).toLowerCase();
+      var same = list.filter(function (x) { return x.lang.replace("_", "-").toLowerCase().indexOf(lang) === 0; });
+      pick = same[0] || list[0];
+    }
+    var u = new SpeechSynthesisUtterance(text);
+    if (pick) { u.voice = pick; u.lang = pick.lang; }
+    u.pitch = TONE_PITCH[v.tone] || 1;
+    u.rate = Math.max(0.5, Math.min(1.5, 1 + (v.rate || 0) / 100));
+    u.onend = function () { if (onEnd) onEnd(); };
+    speechSynthesis.speak(u);
+  }
+  if (window.speechSynthesis) speechSynthesis.onvoiceschanged = function () { /* list fills in later on some browsers */ };
+
+  function voiceSection(c) {
+    var vs = c.voice_engine === "voicestudio", usePreset = !!parseStyle(c.voice_style) || !c.id;
+    return '<fieldset class="voice-box"><legend>Voice <span class="hint">how ' + esc(c.name || "they") + ' sound when replies are read aloud</span></legend>' +
+      '<div class="two"><label>Engine<select name="voice_engine">' +
+        '<option value="edge"' + (vs ? "" : " selected") + '>Online voices (Microsoft Edge)</option>' +
+        '<option value="voicestudio"' + (vs ? " selected" : "") + '>VoiceStudio on this computer</option></select></label>' +
+      '<label class="vs-only"' + (vs ? "" : " hidden") + '>VoiceStudio voice<select name="voice_profile"><option value="">Designed for ' + esc(c.name || "this character") + '</option></select></label></div>' +
+      '<p class="hint vs-only" id="vsNote"' + (vs ? "" : " hidden") + '></p>' +
+      '<div class="two"><label>Voice type<select name="voice_kind"><option value="preset"' + (usePreset ? " selected" : "") + '>Accent voice (accent, age, sound)</option>' +
+        '<option value="country"' + (usePreset ? "" : " selected") + '>Pick by country</option></select></label><span></span></div>' +
+      '<div class="preset-box" id="presetBox">' +
+        '<div class="two"><label>Accent<select name="vp_accent"></select></label><label>Age<select name="vp_age"></select></label></div>' +
+        '<div class="two"><label>Gender<select name="vp_gender"><option value="male">Male</option><option value="female">Female</option></select></label>' +
+        '<label>Sound<select name="vp_sound"></select></label></div>' +
+        '<p class="hint" id="presetNote"></p></div>' +
+      '<div class="two country-only"><label>Country<select name="voice_region"></select></label>' +
+      '<label><span id="voiceLbl">' + (vs ? "Backup voice" : "Voice") + '</span><select name="voice"></select></label></div>' +
+      '<div class="two"><label class="country-only">Tone<select name="voice_tone">' + ["deep", "low", "natural", "bright"].map(function (t) {
+        return '<option value="' + t + '"' + ((c.voice_tone || "natural") === t ? " selected" : "") + ">" + t.charAt(0).toUpperCase() + t.slice(1) + "</option>"; }).join("") + "</select></label>" +
+      '<label>Speed <span class="hint" id="rateShow"></span><input type="range" name="voice_rate" min="-30" max="30" step="5" value="' + (+c.voice_rate || 0) + '"></label></div>' +
+      '<div class="row"><button type="button" class="btn small" id="voicePreview">▶ Preview voice</button><span class="hint" id="voiceNote"></span></div></fieldset>';
+  }
+  function formStyle(form) {
+    return form.voice_kind && form.voice_kind.value === "preset" && form.vp_accent.value
+      ? { accent: form.vp_accent.value, age: form.vp_age.value, gender: form.vp_gender.value, sound: form.vp_sound.value } : null;
+  }
+  function wireVoiceSection(form, c) {
+    loadVoices().then(function (info) {
+      var regionSel = form.voice_region, voiceSel = form.voice;
+      var current = c.voice || (info.defaults || {})[form.gender.value] || "en-US-AvaNeural";
+      var curRegion = current.indexOf("device:") === 0 ? (deviceVoices().filter(function (v) { return v.name === current.slice(7); })[0] || { lang: "en-US" }).lang.replace("_", "-").slice(0, 5) : current.slice(0, 5);
+      function regionOpts(list) {
+        return list.map(function (r) {
+          return '<option value="' + r[0] + '"' + (r[0] === curRegion ? " selected" : "") + ">" + esc(r[1]) + "</option>"; }).join("");
+      }
+      var eng = info.regions.filter(function (r) { return r[0].indexOf("en-") === 0; });
+      var eur = info.regions.filter(function (r) { return r[0].indexOf("en-") !== 0; });
+      regionSel.innerHTML = '<optgroup label="English-speaking countries">' + regionOpts(eng) + "</optgroup>" +
+        (eur.length ? '<optgroup label="Europe (English with that accent)">' + regionOpts(eur) + "</optgroup>" : "");
+      function fill() {
+        var reg = regionSel.value, groups = { male: [], female: [] };
+        info.voices.forEach(function (v) { if (v.region === reg) groups[v.gender].push(v); });
+        var dev = deviceVoices().filter(function (v) { return v.lang.replace("_", "-").toLowerCase().indexOf(reg.toLowerCase()) === 0; });
+        voiceSel.innerHTML = ["female", "male"].map(function (g) {
+          return groups[g].length ? '<optgroup label="' + (g === "male" ? "Male" : "Female") + '">' + groups[g].map(function (v) {
+            return '<option value="' + v.id + '"' + (v.id === current ? " selected" : "") + ">" + esc(v.name) + "</option>"; }).join("") + "</optgroup>" : "";
+        }).join("") + (dev.length ? '<optgroup label="On this device (works offline)">' + dev.map(function (v) {
+          var val = "device:" + v.name;
+          return '<option value="' + esc(val) + '"' + (val === current ? " selected" : "") + ">" + esc(v.name) + "</option>"; }).join("") + "</optgroup>" : "");
+        if (voiceSel.value !== current) {  // new country: start on a voice that matches the character's gender
+          var g = form.gender.value === "male" ? "male" : "female";
+          voiceSel.value = (groups[g][0] || groups.female[0] || groups.male[0] || {}).id || voiceSel.value;
+        }
+      }
+      regionSel.onchange = function () { fill(); current = voiceSel.value; };
+      voiceSel.onchange = function () { current = voiceSel.value; };
+      fill();
+      if (!info.enabled) document.getElementById("voiceNote").textContent = "Online voices aren't installed; device voices will be used.";
+      // VoiceStudio: a voice designed from gender, age, tone and country (same voice every time), or one saved in VoiceStudio.
+      var vsInfo = info.voicestudio || { online: false, profiles: [], url: "" };
+      var profSel = form.voice_profile, have = false;
+      vsInfo.profiles.forEach(function (p) {
+        if (p.id === c.voice_profile) have = true;
+        profSel.insertAdjacentHTML("beforeend", '<option value="' + esc(p.id) + '">' + esc(p.name) + "</option>");
+      });
+      if (c.voice_profile && !have) profSel.insertAdjacentHTML("beforeend", '<option value="' + esc(c.voice_profile) + '">Saved voice (VoiceStudio is off)</option>');
+      profSel.value = c.voice_profile || "";
+      function showEngine() {
+        var on = form.voice_engine.value === "voicestudio";
+        form.querySelectorAll(".vs-only").forEach(function (el) { el.hidden = !on; });
+        document.getElementById("voiceLbl").textContent = on ? "Backup voice" : "Voice";
+        document.getElementById("vsNote").textContent = !vsInfo.online
+          ? "VoiceStudio isn't running at " + vsInfo.url + ". Start it and reload; until then the backup voice reads."
+          : profSel.value ? "Uses this voice from VoiceStudio. Country and tone don't change it; speed does."
+          : "Designed from gender, age, tone and country, and the same every time. Thoughts are whispered. Accents: American, British, Canadian, Australian, Indian, Russian or Portuguese, the closest to the country. For another European accent, clone or design one in VoiceStudio and pick it above.";
+      }
+      form.voice_engine.onchange = function () { showEngine(); showKind(); }; profSel.onchange = showEngine; showEngine();
+      // Accent voices: accent x age x gender x sound.
+      var pre = info.presets || { accents: [], ages: [], sounds: [] }, st = parseStyle(c.voice_style) || {};
+      function opts(list, cur) { return list.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === cur ? " selected" : "") + ">" + esc(x[1]) + "</option>"; }).join(""); }
+      form.vp_accent.innerHTML = opts(pre.accents, st.accent || "irish");
+      form.vp_age.innerHTML = opts(pre.ages, st.age || (+form.age.value <= 25 ? "young" : +form.age.value <= 35 ? "middle" : +form.age.value <= 60 || +form.age.value > 100 ? "older" : "elder"));
+      form.vp_sound.innerHTML = opts(pre.sounds, st.sound || "mysterious");
+      form.vp_gender.value = st.gender || (form.gender.value === "male" ? "male" : "female");
+      function showKind() {
+        var preset = form.voice_kind.value === "preset";
+        document.getElementById("presetBox").hidden = !preset;
+        form.querySelectorAll(".country-only").forEach(function (el) { el.hidden = preset; });
+        var vsOn = form.voice_engine.value === "voicestudio" && !form.voice_profile.value;
+        document.getElementById("presetNote").textContent = !preset ? "" :
+          vsOn && form.vp_accent.value !== "russian" ? "VoiceStudio has no " + form.vp_accent.selectedOptions[0].textContent + " accent built in, so this preset reads with the online voices. Pick a saved VoiceStudio voice to use your own." :
+          "Every accent speaks English. The sound changes the delivery and adds an effect as it plays.";
+      }
+      [form.voice_kind, form.vp_accent].forEach(function (el) { el.addEventListener("change", showKind); });
+      showKind();
+      function showRate() { var r = +form.voice_rate.value; document.getElementById("rateShow").textContent = r === 0 ? "normal" : (r > 0 ? "+" : "") + r + "%"; }
+      form.voice_rate.oninput = showRate; showRate();
+      document.getElementById("voicePreview").onclick = function () {
+        var sample = form.greeting.value.trim() || '"' + "You found me. I wondered how long it would take." + '"';
+        speak(sample, { voice: voiceSel.value, tone: form.voice_tone.value, rate: +form.voice_rate.value, gender: form.gender.value,
+          engine: form.voice_engine.value, profile: form.voice_profile.value, age: form.age.value, name: form.name.value, character_id: c.id,
+          style: formStyle(form) });
+      };
+    });
   }
 
   function api(path, opts) {
@@ -84,7 +345,7 @@
   function avatar(c, cls) {
     var style = c.avatar
       ? "background-image:url('" + esc(c.avatar) + "')"
-      : "background:linear-gradient(135deg," + esc(c.color || "#be123c") + ",#1a0f1f)";
+      : "background:linear-gradient(135deg," + esc(c.color || "#F1916D") + ",#03122F)";
     return '<div class="avatar ' + (cls || "") + '" style="' + style + '">' +
       (c.avatar ? "" : esc((c.name || "?").charAt(0))) + "</div>";
   }
@@ -108,6 +369,50 @@
     if (s < 3600) return Math.floor(s / 60) + "m ago";
     if (s < 86400) return Math.floor(s / 3600) + "h ago";
     return Math.floor(s / 86400) + "d ago";
+  }
+
+  // Time marks: "9:04 PM", "Oct 18, 2026 9:04 PM", and a day heading for chats.
+  function clock(ts) {
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  function stamp(ts) {
+    if (!ts) return "";
+    return new Date(ts * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) + " " + clock(ts);
+  }
+  // In-universe clock, stored as "2026-10-18T23:40" (no time zone).
+  function hhmm(d) {
+    var h = d.getHours() % 12 || 12, m = d.getMinutes();
+    return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m + (d.getHours() < 12 ? " AM" : " PM");
+  }
+  // Day 1 is the day the scene starts on.
+  function storyDay(iso, start) {
+    if (!iso || !start) return 1;
+    var a = new Date(start.slice(0, 10) + "T00:00"), b = new Date(iso.slice(0, 10) + "T00:00");
+    return Math.max(1, Math.round((b - a) / 86400000) + 1);
+  }
+  function storyClock(iso, start, full) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    return "Day " + storyDay(iso, start) + (full ? " · " + d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + ", " : " · ") + hhmm(d);
+  }
+  // Time of day and moon phase, the same rules the server gives the model.
+  var PHASES = [["New moon", "🌑"], ["Waxing crescent", "🌒"], ["First quarter", "🌓"], ["Waxing gibbous", "🌔"],
+    ["Full moon", "🌕"], ["Waning gibbous", "🌖"], ["Last quarter", "🌗"], ["Waning crescent", "🌘"]];
+  function sky(iso) {
+    var d = new Date(iso), h = d.getHours();
+    var age = (((d - new Date(2000, 0, 6, 18, 14)) / 86400000) % 29.530588853 + 29.530588853) % 29.530588853;
+    var p = PHASES[Math.floor(age / 29.530588853 * 8 + 0.5) % 8];
+    return { part: h >= 21 || h < 5 ? "Night" : h < 7 ? "Dawn" : h < 18 ? "Day" : "Dusk", moon: p[0], icon: p[1] };
+  }
+  function nowLine(iso, start) {
+    return "[Current Time: " + hhmm(new Date(iso)) + " | Day " + storyDay(iso, start) + "]";
+  }
+  function stripTimeTags(text, typing) {
+    text = String(text || "").replace(/[*_]*\[\s*(time passed|elapsed time|current time)\s*:[^\]]*\][*_]*/gi, "");
+    return (typing ? text.replace(/\[[^\]]*$/, "") : text).replace(/\s+$/, "");
+  }
+  function dayLabel(ts) {
+    return new Date(ts * 1000).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   }
 
   function setNav(name) {
@@ -165,6 +470,7 @@
     [/^#?\/?$/, viewHome],
     [/^#\/characters$/, viewCharacters],
     [/^#\/character\/new$/, function () { viewCharacterForm(null); }],
+    [/^#\/time-rules$/, viewTimeRules],
     [/^#\/character\/(\d+)$/, function (m) { viewCharacterForm(+m[1]); }],
     [/^#\/chats$/, function () { viewChat(null); }],
     [/^#\/chat\/(\d+)$/, function (m) { viewChat(+m[1]); }],
@@ -253,10 +559,11 @@
 
   function viewCharacterForm(id) {
     setNav("characters");
-    var load = id ? api("/app/api/characters/" + id) : Promise.resolve({
-      name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#be123c", avatar: "",
-    });
-    load.then(function (c) {
+    var load = Promise.all([id ? api("/app/api/characters/" + id) : Promise.resolve({
+      name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#F1916D", avatar: "", profile: {},
+    }), api("/app/api/profile-fields")]);
+    load.then(function (r) {
+      var c = r[0], sections = r[1], prof = c.profile || {};
       view.innerHTML =
         '<div class="create">' +
         '<div class="preview"><div class="card" id="pv"></div></div>' +
@@ -267,15 +574,21 @@
         '<div class="two"><label>Gender<select name="gender">' + ["male", "female", "non-binary"].map(function (g) {
           return "<option" + (c.gender === g ? " selected" : "") + ">" + g + "</option>"; }).join("") + "</select></label>" +
         '<label>Colour<input name="color" type="color" value="' + esc(c.color) + '"></label></div>' +
-        '<label>Tagline<input name="tagline" maxlength="160" placeholder="Mafia heir who never asks twice" value="' + esc(c.tagline) + '"></label>' +
+        '<div class="ai-box"><div class="ai-head"><b>✨ Build with AI</b><span class="hint">or fill everything in yourself below; you can mix both</span></div>' +
+        '<textarea id="aiIdea" rows="2" placeholder="Your idea, e.g. a possessive vampire art dealer in Prague who collects debts in blood"></textarea>' +
+        '<div class="row"><button type="button" class="btn small primary" data-ai="empty">Fill empty fields</button>' +
+        '<button type="button" class="btn small" data-ai="all">Write everything from the idea</button><span class="hint" id="aiStatus"></span></div></div>' +
+        '<label><span class="lbl">Tagline ' + aiBtn("tagline") + '</span><input name="tagline" maxlength="160" placeholder="Mafia heir who never asks twice" value="' + esc(c.tagline) + '"></label>' +
         '<label>Traits <span class="hint">click to add to the personality</span><div class="choices">' +
         TRAITS.map(function (t) { return '<button type="button" class="chip" data-trait="' + t + '">' + t + "</button>"; }).join("") + "</div></label>" +
-        '<label>Personality and backstory<textarea name="persona" rows="5" required placeholder="Who they are, what they want, what they hide, how they talk.">' + esc(c.persona) + "</textarea></label>" +
-        '<label>Appearance<textarea name="appearance" rows="3" placeholder="Lifelike detail, even for supernatural characters: skin, hair, eyes, build, scars, clothes.">' + esc(c.appearance) + "</textarea></label>" +
-        '<label>Opening line <span class="hint">how they greet you in a new scene; use *asterisks* for actions</span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
+        '<label><span class="lbl">Personality and backstory ' + aiBtn("persona") + '</span><textarea name="persona" rows="5" required placeholder="Who they are, what they want, what they hide, how they talk.">' + esc(c.persona) + "</textarea></label>" +
+        '<label><span class="lbl">Appearance ' + aiBtn("appearance") + '</span><textarea name="appearance" rows="3" placeholder="Lifelike detail, even for supernatural characters: skin, hair, eyes, build, scars, clothes.">' + esc(c.appearance) + "</textarea></label>" +
+        profileSection(sections, prof) +
+        '<label><span class="lbl">Opening line ' + aiBtn("greeting") + ' <span class="hint">how they greet you in a new scene: &quot;words&quot;, *actions*, `thoughts`</span></span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
         '<div class="two"><label>Tags <span class="hint">comma separated</span><input name="tags" value="' + esc(c.tags) + '"></label>' +
         '<label>Portrait URL <span class="hint">optional, a photo-realistic image</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
         portraitSection(id, c) +
+        voiceSection(c) +
         '<p class="form-error" id="charErr"></p>' +
         '<div class="row"><button class="btn primary">' + (id ? "Save changes" : "Create character") + "</button>" +
         (id ? '<button type="button" class="btn ghost danger" id="delChar">Delete</button>' : "") + "</div>" +
@@ -286,6 +599,35 @@
         document.getElementById("pv").innerHTML = avatar(d) + '<div class="info"><h3>' + esc(d.name) + " <small>" + esc(d.age) + "</small></h3><p>" + esc(d.tagline) + "</p></div>";
       }
       form.oninput = preview; preview();
+      wireVoiceSection(form, c);
+      form.addEventListener("click", function (e) {
+        var lock = e.target.closest("[data-secret]");
+        if (lock) { setSecret(lock, lock.dataset.secret !== "1"); return; }
+        var b = e.target.closest("[data-ai]");
+        if (!b) return;
+        e.preventDefault();
+        var scope = b.dataset.ai, status = document.getElementById("aiStatus");
+        if (scope === "all" && !document.getElementById("aiIdea").value.trim() && !confirm("Rewrite every field from scratch? What you've written will be replaced.")) return;
+        var body = { character: {}, profile: collectProfile(form), idea: document.getElementById("aiIdea").value, scope: scope };
+        ["name", "age", "gender", "tagline", "appearance", "persona", "greeting", "tags"].forEach(function (k) { body.character[k] = form[k].value; });
+        if (scope === "all" || scope === "empty") status.textContent = "Writing the character…";
+        form.querySelectorAll("[data-ai]").forEach(function (x) { x.disabled = true; });
+        b.classList.add("busy");
+        api("/app/api/characters/ai-fill", { method: "POST", body: body }).then(function (res) {
+          Object.keys(res.character).forEach(function (k) { if (form[k]) form[k].value = res.character[k]; });
+          Object.keys(res.profile).forEach(function (k) {
+            var row = form.querySelector('[data-prow="' + k + '"]');
+            if (!row) return;
+            row.querySelector("textarea").value = res.profile[k].value;
+            setSecret(row.querySelector("[data-secret]"), res.profile[k].secret);
+            var sec = row.closest("details"); if (sec) sec.open = true;
+          });
+          var n = Object.keys(res.character).length + Object.keys(res.profile).length;
+          status.textContent = n ? "Filled " + n + " field" + (n === 1 ? "" : "s") + ". Edit anything, then save." : "Nothing was empty.";
+          preview();
+        }).catch(function (err) { status.textContent = err.message; toast(err.message, true); })
+          .finally(function () { form.querySelectorAll("[data-ai]").forEach(function (x) { x.disabled = false; }); b.classList.remove("busy"); });
+      });
       form.querySelectorAll("[data-trait]").forEach(function (b) {
         b.onclick = function () {
           var t = b.getAttribute("data-trait");
@@ -297,7 +639,9 @@
       form.onsubmit = function (e) {
         e.preventDefault();
         var body = { id: id };
-        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar"].forEach(function (k) { body[k] = form[k].value; });
+        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate", "voice_engine", "voice_profile"].forEach(function (k) { body[k] = form[k].value; });
+        body.voice_style = formStyle(form) || "";
+        body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { toast("Saved"); location.hash = "#/characters"; })
           .catch(function (err) { document.getElementById("charErr").textContent = err.message; });
@@ -310,7 +654,9 @@
         status.textContent = promptEl.value.trim() ? "Generating the portrait…" : "Writing a photo prompt, then generating…";
         // Save the card first so the prompt is written from what's on screen.
         var body = { id: id };
-        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar"].forEach(function (k) { body[k] = form[k].value; });
+        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate", "voice_engine", "voice_profile"].forEach(function (k) { body[k] = form[k].value; });
+        body.voice_style = formStyle(form) || "";
+        body.profile = collectProfile(form);
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })
           .then(function (r) {
@@ -328,6 +674,41 @@
         api("/app/api/characters/" + id, { method: "DELETE" }).then(function () { location.hash = "#/characters"; });
       };
     });
+  }
+
+  // ---------- character profile ----------
+  function aiBtn(key) {
+    return '<button type="button" class="ai-one" data-ai="' + key + '" title="Write this with AI">✨</button>';
+  }
+  function lockBtn(secret) {
+    return '<button type="button" class="lock' + (secret ? " on" : "") + '" data-secret="' + (secret ? "1" : "0") + '" title="Secret: true, but they hide it. Public: you know or can see it.">' +
+      (secret ? "🔒 Secret" : "👁 Public") + "</button>";
+  }
+  function setSecret(btn, on) {
+    btn.dataset.secret = on ? "1" : "0";
+    btn.classList.toggle("on", !!on);
+    btn.textContent = on ? "🔒 Secret" : "👁 Public";
+  }
+  function profileSection(sections, prof) {
+    return '<div class="profile-box"><h3>Profile <span class="hint">everything that makes them real. Mark each detail public, or secret: true, but they hide it until the story earns it</span></h3>' +
+      sections.map(function (sec, si) {
+        var filled = sec.fields.filter(function (f) { return prof[f.key]; }).length;
+        return '<details' + (si === 0 || filled ? " open" : "") + '><summary>' + esc(sec.section) +
+          ' <span class="hint">' + filled + " of " + sec.fields.length + "</span></summary>" +
+          sec.fields.map(function (f) {
+            var v = prof[f.key] || { value: "", secret: false };
+            return '<div class="prow" data-prow="' + f.key + '"><div class="prow-head"><span>' + esc(f.label) + "</span>" + aiBtn(f.key) + lockBtn(v.secret) + "</div>" +
+              '<textarea rows="2" data-pkey="' + f.key + '" placeholder="' + esc(f.hint) + '">' + esc(v.value) + "</textarea></div>";
+          }).join("") + "</details>";
+      }).join("") + "</div>";
+  }
+  function collectProfile(form) {
+    var out = {};
+    form.querySelectorAll("[data-prow]").forEach(function (row) {
+      var v = row.querySelector("textarea").value.trim();
+      if (v) out[row.dataset.prow] = { value: v, secret: row.querySelector("[data-secret]").dataset.secret === "1" };
+    });
+    return out;
   }
 
   function portraitSection(id, c) {
@@ -350,52 +731,164 @@
     setNav("chats");
     view.className = "page-chat";
     var ctrl = null;
-    cleanup = function () { if (ctrl) ctrl.abort(); };
-    Promise.all([api("/app/api/conversations"), convId ? api("/app/api/conversations/" + convId) : null]).then(function (r) {
-      var convs = r[0], conv = r[1];
+    cleanup = function () { if (ctrl) ctrl.abort(); stopSpeaking(); };
+    Promise.all([api("/app/api/conversations"), convId ? api("/app/api/conversations/" + convId) : null,
+      api("/app/api/storylines"), api("/app/api/characters")]).then(function (r) {
+      var convs = r[0], conv = r[1], stories = r[2], chars = r[3];
       if (!conv && convs.length) { location.replace("#/chat/" + convs[0].id); return; }
-      var side = '<aside class="sidebar"><h4>Scenes</h4>' + (convs.map(function (cv) { return convLink(cv, cv.id === convId); }).join("") ||
-        '<p class="muted pad">No scenes yet.</p>') + '<a class="btn small wide" href="#/characters">+ New scene</a></aside>';
+      var charOptions = chars.map(function (ch) { return '<option value="' + ch.id + '">' + esc(ch.name) + "</option>"; }).join("");
+      // Sidebar: storylines, newest first, each with its scenes.
+      var side = '<aside class="sidebar"><h4>Storylines<button type="button" class="side-toggle side-close" title="Close">×</button></h4>' + stories.map(function (st) {
+        var mine = convs.filter(function (cv) { return cv.storyline_id === st.id; });
+        var open = conv && conv.storyline && conv.storyline.id === st.id;
+        return '<div class="story' + (open ? " open" : "") + '" data-story="' + st.id + '">' +
+          '<div class="story-head"><b title="' + esc(st.premise) + '">' + esc(st.title) + "</b>" +
+          '<button type="button" data-editstory="' + st.id + '" title="Edit storyline">✎</button>' +
+          '<button type="button" data-addscene="' + st.id + '" title="New scene in this storyline">＋</button></div>' +
+          '<form class="story-form" data-sceneform="' + st.id + '" hidden><select name="character">' + charOptions + "</select>" +
+          '<button class="btn small primary">Start scene</button></form>' +
+          '<form class="story-form" data-editform="' + st.id + '" hidden><input name="title" maxlength="120" value="' + esc(st.title) + '">' +
+          '<textarea name="premise" rows="3" placeholder="Premise">' + esc(st.premise) + "</textarea>" +
+          '<div class="row"><button class="btn small primary">Save</button><button type="button" class="btn small ghost danger" data-delstory="' + st.id + '">Delete storyline</button></div></form>' +
+          mine.map(function (cv) { return convLink(cv, cv.id === convId); }).join("") + "</div>";
+      }).join("") +
+        (stories.length ? "" : '<p class="muted pad">No storylines yet.</p>') +
+        '<button type="button" class="btn small wide" id="newStoryBtn">+ New storyline</button>' +
+        '<form class="story-form" id="newStory" hidden><input name="title" maxlength="120" placeholder="Title, e.g. The Volkov debt" required>' +
+        '<textarea name="premise" rows="3" placeholder="Premise (optional): who you are, where it starts, what\'s at stake"></textarea>' +
+        '<label>First character<select name="character">' + charOptions + "</select></label>" +
+        '<label>Story starts<input type="datetime-local" name="start"></label>' +
+        '<button class="btn small primary">Start storyline</button></form></aside>';
+      function wireSidebar() {
+        var sb = view.querySelector(".sidebar");
+        sb.onclick = function (e) {
+          var b = e.target.closest("button");
+          if (!b) return;
+          if (b.classList.contains("side-close")) { view.querySelector(".chat-layout").classList.remove("show-side"); }
+          else if (b.id === "newStoryBtn") { document.getElementById("newStory").hidden = !document.getElementById("newStory").hidden; }
+          else if (b.dataset.addscene) { var f = sb.querySelector('[data-sceneform="' + b.dataset.addscene + '"]'); f.hidden = !f.hidden; }
+          else if (b.dataset.editstory) { var g = sb.querySelector('[data-editform="' + b.dataset.editstory + '"]'); g.hidden = !g.hidden; }
+          else if (b.dataset.delstory) {
+            if (!confirm("Delete this storyline, all its scenes and everything learned in it? This can't be undone.")) return;
+            api("/app/api/storylines/" + b.dataset.delstory, { method: "DELETE" }).then(function () { location.hash = "#/chats"; route(); });
+          }
+        };
+        sb.onsubmit = function (e) {
+          e.preventDefault();
+          var f = e.target;
+          if (f.id === "newStory") {
+            api("/app/api/storylines", { method: "POST", body: { title: f.title.value, premise: f.premise.value } })
+              .then(function (st) {
+                return api("/app/api/conversations", { method: "POST", body: { character_id: +f.character.value, storyline_id: st.id, new: true, story_start: f.start.value || null } });
+              })
+              .then(function (r) { location.hash = "#/chat/" + r.id; })
+              .catch(function (err) { toast(err.message, true); });
+          } else if (f.dataset.sceneform) {
+            api("/app/api/conversations", { method: "POST", body: { character_id: +f.character.value, storyline_id: +f.dataset.sceneform, new: true } })
+              .then(function (r) { location.hash = "#/chat/" + r.id; })
+              .catch(function (err) { toast(err.message, true); });
+          } else if (f.dataset.editform) {
+            api("/app/api/storylines/" + f.dataset.editform, { method: "PUT", body: { title: f.title.value, premise: f.premise.value } })
+              .then(function () { toast("Storyline saved"); route(); })
+              .catch(function (err) { toast(err.message, true); });
+          }
+        };
+      }
       if (!conv) {
-        view.innerHTML = '<div class="chat-layout">' + side + '<section class="chat"><div class="empty">Pick a character to start a scene.<br><br><a class="btn primary" href="#/characters">Choose a character</a></div></section></div>';
+        view.innerHTML = '<div class="chat-layout">' + side + '<section class="chat"><div class="empty"><button type="button" class="btn small ghost side-toggle" onclick="this.closest(\'.chat-layout\').classList.toggle(\'show-side\')">☰ Storylines</button><br>Start a storyline, or pick a character to begin.<br><br><a class="btn primary" href="#/characters">Choose a character</a></div></section></div>';
+        wireSidebar();
         return;
       }
       var c = conv.character;
       view.innerHTML = '<div class="chat-layout">' + side +
         '<section class="chat">' +
-        '<div class="chat-head">' + avatar(c) + '<div class="grow"><b>' + esc(c.name) + "</b><p>" +
-        (conv.novel ? "Scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : esc(c.tagline)) + "</p></div>" +
-        '<button class="btn small" id="newScene" title="Start over with the opening line">New scene</button>' +
+        '<div class="chat-head"><button type="button" class="btn small ghost side-toggle" id="sideBtn" title="Storylines and scenes">☰</button>' + avatar(c) + '<div class="grow"><b>' + esc(c.name) + "</b><p>" +
+        (conv.storyline ? esc(conv.storyline.title) : esc(c.tagline)) +
+        (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div>" +
+        '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">🕒 <span id="clockNow"></span></button>' +
+        '<button class="btn small" id="voiceBtn" title="Read aloud">🔊</button>' +
+        '<button class="btn small" id="memBtn" title="What ' + esc(c.name) + ' remembers">Memory</button>' +
+        '<button class="btn small" id="newScene" title="A new scene in this storyline, starting at its current time">New scene</button>' +
         '<button class="btn small ghost" id="delConv" title="Delete this scene">🗑</button></div>' +
+        '<div class="memory-panel" id="memPanel" hidden></div>' +
+        '<div class="voice-panel" id="voicePanel" hidden>' +
+        '<label class="check-line"><input type="checkbox" id="autoRead"> Read ' + esc(c.name) + "'s replies aloud as they arrive</label>" +
+        '<label>Read<select id="readMode"><option value="all">everything (words, actions, thoughts)</option>' +
+        '<option value="words_thoughts">spoken words and thoughts</option><option value="words">spoken words only</option></select></label>' +
+        '<a class="btn small ghost" href="#/character/' + c.id + '">Change ' + esc(c.name) + "'s voice</a></div>" +
+        '<form class="clock-panel" id="clockPanel" hidden>' +
+        '<label>Set the clock to<input type="datetime-local" id="clockSet"></label>' +
+        '<label>or skip ahead<span class="row"><input type="number" id="skipH" min="0" max="672" placeholder="0"> h ' +
+        '<input type="number" id="skipM" min="0" max="59" placeholder="0"> min</span></label>' +
+        '<label class="grow">Label (optional)<input id="clockLabel" maxlength="120" placeholder="The next morning, his penthouse"></label>' +
+        '<button class="btn small primary">Mark time</button><a class="btn small ghost" href="#/time-rules">Time rules</a>' +
+        '<div class="scene-rules"><h4>Time rules for this scene <span class="hint">add to the main table; same name replaces it</span></h4>' +
+        '<div id="sceneRules"></div><button type="button" class="btn small" id="srAdd">+ Add rule</button> ' +
+        '<button type="button" class="btn small" id="srSave">Save scene rules</button></div></form>' +
         '<div class="messages" id="msgs"></div>' +
-        '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Write your reply. Use *asterisks* for actions."></textarea>' +
+        '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Reply with &quot;words&quot;, *actions* and `thoughts`. Add [Time: 45 min] to set how long it takes."></textarea>' +
         '<button class="btn primary" id="sendBtn">Send</button></form>' +
-        '<p class="notice">' + esc(c.name) + " is an AI character. Every character is a fictional adult.</p>" +
+        '<p class="notice rp-legend"><span class="rp-speech">"Words"</span><em class="rp-action">actions</em><span class="rp-thought">thoughts</span>' +
+        "<span>" + esc(c.name) + " is an AI character. Every character is a fictional adult.</span></p>" +
         "</section></div>";
+      wireSidebar();
+      document.getElementById("sideBtn").onclick = function () { view.querySelector(".chat-layout").classList.toggle("show-side"); };
 
       var msgs = document.getElementById("msgs");
       var input = document.getElementById("input");
       var sendBtn = document.getElementById("sendBtn");
       var list = conv.messages.slice();
 
-      function render() {
+      function currentClock() {
+        for (var j = list.length - 1; j >= 0; j--) if (list[j].story_at) return list[j].story_at;
+        return conv.clock;
+      }
+      function render(keepScroll) {
+        var lastDay = "", top = msgs.scrollTop;
+        var start = conv.start || currentClock();
+        var sk = sky(currentClock());
+        document.getElementById("clockNow").textContent = storyClock(currentClock(), start, true) + " · " + sk.part + " · " + sk.icon;
+        document.getElementById("clockBtn").title = "In-story time. " + sk.part + ", " + sk.moon.toLowerCase() + ". Set the clock or skip ahead.";
         msgs.innerHTML = list.map(function (m, i) {
           var isLast = i === list.length - 1;
-          return '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
-            '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(m.content) + "</div>" +
-            (m.id && !m.typing ? '<div class="msg-tools">' +
+          var ts = m.created_at || Date.now() / 1000;
+          var day = dayLabel(ts), head = "";
+          if (day !== lastDay) { head = '<div class="day-mark"><span>' + esc(day) + "</span></div>"; lastDay = day; }
+          if (m.role === "mark") {
+            return head + '<div class="story-mark"><span>⏱ ' + esc(m.content) + (m.story_at ? " · " + esc(storyClock(m.story_at, start, true)) : "") +
+              '</span><time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + '</time><button data-delmark="' + m.id + '" title="Remove this time mark">×</button></div>';
+          }
+          return head + '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
+            '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
+            (m.role === "assistant" && m.story_at ? '<button type="button" class="now" data-settime="' + m.id + '" title="Change this time">' + esc(nowLine(m.story_at, start)) + "</button>" : "") + "</div>" +
+            (m.picturing ? '<div class="scene-pic busy"><span>🎨 Picturing this moment…</span></div>' :
+              m.image ? '<figure class="scene-pic"><a href="' + esc(m.image) + '" target="_blank" rel="noopener" title="Open full size"><img src="' + esc(m.image) + '" alt="Picture of this moment" loading="lazy"></a>' +
+                '<figcaption><button data-picture="' + i + '">↻ New picture</button><button data-picprompt="' + i + '">✎ Edit prompt</button><button data-picdel="' + i + '">× Remove</button></figcaption></figure>' : "") +
+            (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
+              '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time>" +
+              (m.role === "assistant" ? '<button data-listen="' + i + '">🔊 Listen</button>' : "") +
+              (!m.image && !m.picturing ? '<button data-picture="' + i + '" title="Make a picture of this moment">🖼 Picture</button>' : "") +
               (m.role === "assistant" && isLast && i > 0 ? '<button data-regen="' + m.id + '">↻ Regenerate</button>' : "") +
               (conv.novel && m.role === "assistant" ? '<button data-tochapter="' + i + '">＋ Add to chapter</button>' : "") +
               (i > 0 ? '<button data-rewind="' + m.id + '">Rewind to here</button>' : "") + "</div>" : "") +
             "</div></div>";
         }).join("");
-        msgs.scrollTop = msgs.scrollHeight;
+        msgs.scrollTop = keepScroll ? top : msgs.scrollHeight;
       }
       render();
 
+      // A picture of one moment: that message drives the action, the server adds what's known about everyone in it.
+      function makePicture(m, promptText) {
+        m.picturing = true; render(true);
+        api("/app/api/messages/" + m.id + "/picture", { method: "POST", body: promptText ? { prompt: promptText } : {} })
+          .then(function (r) { m.image = r.image; m.image_prompt = r.prompt; })
+          .catch(function (err) { toast(err.message, true); })
+          .finally(function () { m.picturing = false; render(true); });
+      }
+
       function send(text) {
         sendBtn.disabled = true;
-        if (text) list.push({ role: "user", content: text });
+        if (text) list.push({ role: "user", content: text, created_at: Date.now() / 1000 });
         var pending = { role: "assistant", content: "", typing: true };
         list.push(pending);
         render();
@@ -406,6 +899,8 @@
           return api("/app/api/conversations/" + convId);
         }).then(function (fresh) {
           list = fresh.messages; render();
+          var last = list[list.length - 1];
+          if (pref("autoRead", "0") === "1" && last && last.role === "assistant") speak(last.content, voiceFor(c));
         }).catch(function (e) {
           if (e.name === "AbortError") return;
           list.pop(); render(); toast(e.message, true);
@@ -434,12 +929,129 @@
           api("/app/api/messages/" + b.dataset.rewind, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id < +b.dataset.rewind; }); render();
           });
+        } else if (b.dataset.listen) {
+          if (b.classList.contains("playing")) { stopSpeaking(); return; }
+          var idx = +b.dataset.listen;
+          speak(list[idx].content, voiceFor(c), function () { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
+          b.classList.add("playing"); b.textContent = "■ Stop";
+        } else if (b.dataset.settime) {
+          var v = prompt("When does this reply end? Type a time (03:15 AM) or how long it took (45 min, 2 hours). Later messages move with it.");
+          if (!v || !v.trim()) return;
+          api("/app/api/messages/" + b.dataset.settime + "/time", { method: "PUT", body: { value: v.trim() } })
+            .then(function () { return api("/app/api/conversations/" + convId); })
+            .then(function (fresh) { list = fresh.messages; render(); toast("Time updated"); })
+            .catch(function (err) { toast(err.message, true); });
+        } else if (b.dataset.delmark) {
+          api("/app/api/marks/" + b.dataset.delmark, { method: "DELETE" }).then(function () {
+            list = list.filter(function (m) { return m.id !== +b.dataset.delmark; }); render();
+          });
+        } else if (b.dataset.picture) {
+          makePicture(list[+b.dataset.picture]);
+        } else if (b.dataset.picprompt) {
+          var pm = list[+b.dataset.picprompt];
+          var edited = prompt("Picture prompt. Change it and press OK to make a new picture.", pm.image_prompt || "");
+          if (edited && edited.trim()) makePicture(pm, edited.trim());
+        } else if (b.dataset.picdel) {
+          var dm = list[+b.dataset.picdel];
+          api("/app/api/messages/" + dm.id + "/picture", { method: "DELETE" }).then(function () { dm.image = ""; dm.image_prompt = ""; render(true); });
         } else if (b.dataset.tochapter) {
           addToChapter(conv.novel.id, list[+b.dataset.tochapter].content);
         }
       };
+      var voicePanel = document.getElementById("voicePanel");
+      document.getElementById("voiceBtn").onclick = function () { voicePanel.hidden = !voicePanel.hidden; };
+      var autoRead = document.getElementById("autoRead"), readMode = document.getElementById("readMode");
+      autoRead.checked = pref("autoRead", "0") === "1";
+      readMode.value = pref("readMode", "all");
+      document.getElementById("voiceBtn").classList.toggle("on", autoRead.checked);
+      autoRead.onchange = function () {
+        setPref("autoRead", autoRead.checked ? "1" : "0");
+        document.getElementById("voiceBtn").classList.toggle("on", autoRead.checked);
+        if (!autoRead.checked) stopSpeaking();
+      };
+      readMode.onchange = function () { setPref("readMode", readMode.value); };
+      var clockPanel = document.getElementById("clockPanel");
+      var sceneRules = (conv.time_rules || []).slice();
+      function drawSceneRules() {
+        document.getElementById("sceneRules").innerHTML = sceneRules.map(function (a, i) {
+          return '<div class="sr-row" data-i="' + i + '"><input data-k="label" placeholder="Action, e.g. Shapeshifting" value="' + esc(a.label) + '">' +
+            '<input data-k="min" type="number" min="0" step="any" value="' + a.min + '" aria-label="Minimum minutes"> to ' +
+            '<input data-k="max" type="number" min="0" step="any" value="' + a.max + '" aria-label="Maximum minutes"> min ' +
+            '<input data-k="per" placeholder="per…" value="' + esc(a.per || "") + '" class="sr-per">' +
+            '<button type="button" data-delrule="' + i + '" title="Remove">×</button></div>';
+        }).join("") || '<p class="muted">None yet.</p>';
+      }
+      drawSceneRules();
+      document.getElementById("sceneRules").oninput = function (e) {
+        var row = e.target.closest(".sr-row"), k = e.target.dataset.k;
+        if (!row || !k) return;
+        sceneRules[+row.dataset.i][k] = k === "min" || k === "max" ? parseFloat(e.target.value) || 0 : e.target.value;
+      };
+      document.getElementById("sceneRules").onclick = function (e) {
+        var b = e.target.closest("[data-delrule]");
+        if (b) { sceneRules.splice(+b.dataset.delrule, 1); drawSceneRules(); }
+      };
+      document.getElementById("srAdd").onclick = function () { sceneRules.push({ label: "", min: 1, max: 5, per: "" }); drawSceneRules(); };
+      document.getElementById("srSave").onclick = function () {
+        api("/app/api/conversations/" + convId + "/time-rules", { method: "PUT", body: { actions: sceneRules } })
+          .then(function (r) { sceneRules = r.actions; drawSceneRules(); toast("Scene rules saved"); })
+          .catch(function (err) { toast(err.message, true); });
+      };
+      document.getElementById("clockBtn").onclick = function () {
+        clockPanel.hidden = !clockPanel.hidden;
+        if (!clockPanel.hidden) document.getElementById("clockSet").value = currentClock().slice(0, 16);
+      };
+      clockPanel.onsubmit = function (e) {
+        e.preventDefault();
+        var set = document.getElementById("clockSet").value;
+        var skip = (+document.getElementById("skipH").value || 0) * 60 + (+document.getElementById("skipM").value || 0);
+        var body = { story_time: document.getElementById("clockLabel").value.trim(), skip_minutes: skip };
+        if (set && set !== currentClock().slice(0, 16)) body.set = set;
+        if (!body.set && !skip && !body.story_time) { toast("Set a time, a skip or a label first.", true); return; }
+        api("/app/api/conversations/" + convId + "/marks", { method: "POST", body: body })
+          .then(function (m) { list.push(m); clockPanel.hidden = true; clockPanel.reset(); render(); })
+          .catch(function (err) { toast(err.message, true); });
+      };
+      var memPanel = document.getElementById("memPanel");
+      function loadMemory() {
+        Promise.all([api("/app/api/characters/" + c.id + "/memories?storyline=" + (conv.storyline ? conv.storyline.id : "")), api("/app/api/conversations/" + convId)]).then(function (r) {
+          var mems = r[0], fresh = r[1];
+          memPanel.innerHTML =
+            '<div class="mem-col"><h4>This scene so far' + (fresh.summary_upto ? ' <span class="hint">up to ' + esc(stamp(fresh.summary_upto)) + "</span>" : "") + "</h4>" +
+            '<textarea id="sumText" rows="5" placeholder="Filled in automatically once the scene gets long. You can edit it.">' + esc(fresh.summary) + "</textarea>" +
+            '<button class="btn small" id="sumSave">Save summary</button></div>' +
+            '<div class="mem-col"><h4>' + esc(c.name) + " remembers <span class=\"hint\">in every scene of this storyline</span></h4>" +
+            '<form class="row" id="memAdd"><input id="memText" placeholder="Add something they should never forget"><button class="btn small">Add</button></form>' +
+            '<label class="check-line"><input type="checkbox" id="memAll"> Remember in every storyline</label>' +
+            '<ul class="mem-list">' + (mems.map(function (m) {
+              var when = stamp(m.said_at || m.created_at) + (m.story_time ? " · story time: " + m.story_time : "");
+              return '<li><div class="grow"><span>' + esc(m.content) + "</span>" +
+                (m.quote ? '<q>' + esc(m.quote) + "</q>" : "") +
+                '<small>' + esc(when) + " · " + (m.source === "user" ? "added by you" : "from a scene") + (m.storyline_id ? "" : " · every storyline") + "</small></div>" +
+                '<button data-delmem="' + m.id + '" title="Forget">×</button></li>';
+            }).join("") || '<li class="muted">Nothing yet. Memories are added automatically as you play.</li>') + "</ul></div>";
+          document.getElementById("sumSave").onclick = function () {
+            api("/app/api/conversations/" + convId + "/summary", { method: "PUT", body: { summary: document.getElementById("sumText").value } })
+              .then(function () { toast("Summary saved"); });
+          };
+          document.getElementById("memAdd").onsubmit = function (e) {
+            e.preventDefault();
+            var t = document.getElementById("memText").value.trim();
+            if (!t) return;
+            api("/app/api/characters/" + c.id + "/memories", { method: "POST", body: { content: t, storyline_id: conv.storyline ? conv.storyline.id : null, everywhere: document.getElementById("memAll").checked } }).then(loadMemory)
+              .catch(function (err) { toast(err.message, true); });
+          };
+          memPanel.querySelectorAll("[data-delmem]").forEach(function (b) {
+            b.onclick = function () { api("/app/api/memories/" + b.dataset.delmem, { method: "DELETE" }).then(loadMemory); };
+          });
+        });
+      }
+      document.getElementById("memBtn").onclick = function () {
+        memPanel.hidden = !memPanel.hidden;
+        if (!memPanel.hidden) loadMemory();
+      };
       document.getElementById("newScene").onclick = function () {
-        api("/app/api/conversations", { method: "POST", body: { character_id: c.id, novel_id: conv.novel ? conv.novel.id : null, new: true } })
+        api("/app/api/conversations", { method: "POST", body: { character_id: c.id, novel_id: conv.novel ? conv.novel.id : null, new: true, storyline_from: convId } })
           .then(function (r) { location.hash = "#/chat/" + r.id; });
       };
       document.getElementById("delConv").onclick = function () {
@@ -449,13 +1061,71 @@
     });
   }
 
+  // Time rules: the action-time table and pace the roleplay clock uses.
+  function viewTimeRules() {
+    setNav("chats");
+    view.className = "";
+    api("/app/api/time-rules").then(function (cfg) {
+      var rows = cfg.actions.map(function (a) { return Object.assign({}, a); }), pace = cfg.pace;
+      function fmt(m) { return m < 1 ? Math.round(m * 60) + " s" : m >= 60 && m % 60 === 0 ? m / 60 + " h" : m + " min"; }
+      function draw() {
+        view.innerHTML =
+          '<form class="panel form time-rules" id="trForm"><h2>Time rules</h2>' +
+          '<p class="hint">How much in-story time each kind of action takes. The AI picks a value in the range for what ' +
+          "happened, the app adds it to the scene clock and prints <i>[Current Time: 02:45 AM | Day 3]</i> after every reply. " +
+          "Times are in minutes; use decimals for seconds (0.5 = 30 seconds).</p>" +
+          '<div class="seg" role="group" aria-label="Pace">' + cfg.paces.map(function (p) {
+            return '<button type="button" data-pace="' + p + '" class="' + (p === pace ? "on" : "") + '">' + p.toFixed(1) + "x " +
+              (p < 1 ? "Slow" : p > 1 ? "Fast" : "Real") + "</button>";
+          }).join("") + "</div>" +
+          '<div class="tr-rows">' + rows.map(function (a, i) {
+            return '<div class="tr-row" data-i="' + i + '">' +
+              '<input data-k="label" value="' + esc(a.label) + '" aria-label="Action" class="tr-label">' +
+              '<span class="tr-range"><input data-k="min" type="number" min="0" step="any" value="' + a.min + '" aria-label="Minimum minutes"> to ' +
+              '<input data-k="max" type="number" min="0" step="any" value="' + a.max + '" aria-label="Maximum minutes"> min</span>' +
+              '<input data-k="per" value="' + esc(a.per) + '" placeholder="per…" aria-label="Per" class="tr-per">' +
+              '<input data-k="context" value="' + esc(a.context) + '" placeholder="Context" aria-label="Context" class="tr-ctx">' +
+              '<small class="tr-show">' + esc(a.min === a.max ? fmt(a.min) : fmt(a.min) + " – " + fmt(a.max)) + (a.per ? " / " + esc(a.per) : "") + "</small>" +
+              '<button type="button" class="btn small ghost" data-del="' + i + '" title="Remove">×</button></div>';
+          }).join("") + "</div>" +
+          '<div class="row"><button type="button" class="btn small" id="trAdd">+ Add action</button>' +
+          '<button type="button" class="btn small ghost" id="trReset">Reset to defaults</button>' +
+          '<span class="grow"></span><button class="btn primary">Save time rules</button></div>' +
+          '<p class="form-error" id="trErr"></p></form>';
+        var form = document.getElementById("trForm");
+        form.oninput = function (e) {
+          var row = e.target.closest(".tr-row");
+          if (!row) return;
+          var a = rows[+row.dataset.i], k = e.target.dataset.k;
+          a[k] = k === "min" || k === "max" ? parseFloat(e.target.value) || 0 : e.target.value;
+          row.querySelector(".tr-show").textContent = (a.min === a.max ? fmt(a.min) : fmt(a.min) + " – " + fmt(a.max)) + (a.per ? " / " + a.per : "");
+        };
+        form.onclick = function (e) {
+          var b = e.target.closest("button");
+          if (!b) return;
+          if (b.dataset.pace) { pace = +b.dataset.pace; draw(); }
+          else if (b.dataset.del) { rows.splice(+b.dataset.del, 1); draw(); }
+          else if (b.id === "trAdd") { rows.push({ label: "", min: 1, max: 5, per: "", context: "" }); draw(); }
+          else if (b.id === "trReset") { rows = cfg.defaults.map(function (a) { return Object.assign({}, a); }); pace = 1; draw(); }
+        };
+        form.onsubmit = function (e) {
+          e.preventDefault();
+          api("/app/api/time-rules", { method: "PUT", body: { pace: pace, actions: rows } })
+            .then(function () { toast("Time rules saved"); history.back(); })
+            .catch(function (err) { document.getElementById("trErr").textContent = err.message; });
+        };
+      }
+      draw();
+    });
+  }
+
   // Append roleplay text to the last chapter of a novel, as prose.
   function addToChapter(novelId, text) {
     api("/app/api/novels/" + novelId).then(function (n) {
       var ch = n.chapters[n.chapters.length - 1];
       if (!ch) return toast("That novel has no chapters", true);
       return api("/app/api/chapters/" + ch.id).then(function (full) {
-        var content = (full.content.trim() ? full.content.replace(/\s*$/, "\n\n") : "") + text.replace(/\*([^*\n]+)\*/g, "$1");
+        var content = (full.content.trim() ? full.content.replace(/\s*$/, "\n\n") : "") + text.replace(/\*([^*\n]+)\*/g, "$1").replace(/`([^`\n]+)`|\(\(([^\n]+?)\)\)/g, function (m, a, b) { return "*" + (a || b) + "*"; });
         return api("/app/api/chapters/" + ch.id, { method: "PUT", body: { content: content } });
       }).then(function () { toast("Added to " + ch.title); });
     }).catch(function (e) { toast(e.message, true); });
