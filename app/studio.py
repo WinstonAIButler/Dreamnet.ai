@@ -1190,6 +1190,8 @@ async def _scene_prompt(s: dict, m: dict) -> str:
 async def _complete(user_id: int, messages: list[dict], temperature: float, max_tokens: int,
                     model: str | None = None) -> str:
     """One non-streaming completion through the proxy's queue; returns the text."""
+    if not api_routes.FEATHERLESS_API_KEY:  # fail now, not after minutes of retries
+        raise HTTPException(status_code=503, detail=NO_AI_KEY)
     model = model or DEFAULT_MODEL
     key = await _web_key(user_id)
     cfg = api_routes._resolve_model(await get_model_by_id(DB_PATH, model))
