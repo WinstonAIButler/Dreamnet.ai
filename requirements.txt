@@ -3,4 +3,5 @@ uvicorn[standard]
 httpx
 jinja2
 python-multipart
-aiosqlitepython-dotenv
+aiosqlite
+python-dotenv
