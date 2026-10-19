@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
+import app.option_images as option_images
 import app.places as places
 import app.portraits as portraits
 import app.profile as profiles
@@ -128,7 +129,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     summarized_upto INTEGER NOT NULL DEFAULT 0, -- last message id folded into summary
     time_rules TEXT NOT NULL DEFAULT '',        -- JSON list of extra or overriding actions for this scene
     location TEXT NOT NULL DEFAULT '',          -- where the scene starts
-    situation TEXT NOT NULL DEFAULT '',         -- what's happening as it starts (optional)
+    situation TEXT NOT NULL DEFAULT '',         -- the scenario: what's going on as it starts (optional)
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -1391,17 +1392,25 @@ async def start_conversation(request: Request, s: dict = Depends(_session)):
     except ValueError:
         return _err(400, "That story start time isn't a valid date and time.")
     location = " ".join(str(body.get("location") or "").split())[:300]
-    situation = " ".join(str(body.get("situation") or "").split())[:600]
-    if mentions_minor(location + " " + situation, strict=True):
+    situation = str(body.get("situation") or "").strip()[:1500]
+    first_line = str(body.get("opening") or "").strip()[:2000]  # the scene's first message, written by the user
+    user_first = body.get("first") == "you" and bool(first_line)
+    if mentions_minor(location + " " + situation + " " + first_line, strict=True):
         return _err(400, "Dreamnet doesn't allow content involving anyone under 18.")
     cv = await _exec("INSERT INTO conversations (character_id, novel_id, storyline_id, location, situation, "
                      "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
                      (c["id"], novel_id, storyline_id, location, situation, now, now))
     await _exec("UPDATE storylines SET updated_at = ? WHERE id = ?", (now, storyline_id))
-    opening = c["greeting"]
     if location or situation:
+        mark = f"Starts at: {location}" if location else "Scenario: " + (situation[:80] + ("…" if len(situation) > 80 else ""))
         await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
-                    (cv, "mark", "Starts at: " + (location or situation), _iso(start), now))
+                    (cv, "mark", mark, _iso(start), now))
+    if user_first:  # the user opens the scene; the web app asks for the character's reply next
+        await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
+                    (cv, "user", first_line, _iso(start), now))
+        return JSONResponse({"id": cv, "awaiting_reply": True})
+    opening = first_line or c["greeting"]
+    if not first_line and (location or situation):
         opening = await _opening(s, c, storyline_id, location, situation, start) or opening
     await _exec("INSERT INTO messages (conversation_id, role, content, story_at, created_at) VALUES (?,?,?,?,?)",
                 (cv, "assistant", opening, _iso(start), now))
@@ -1412,6 +1421,21 @@ async def start_conversation(request: Request, s: dict = Depends(_session)):
 async def list_places(character_id: int = 0, s: dict = Depends(_session)):
     c = await _row("SELECT * FROM characters WHERE id = ?", (character_id,)) if character_id else None
     return JSONResponse({"groups": places.catalog(c)})
+
+
+@router.get("/option-image")
+async def option_image(set: str, key: str, g: str = "", s: dict = Depends(_session)):
+    """Realistic photo for a choice tile in the character creator or the place picker."""
+    key = " ".join(key.split())[:200]
+    if set not in option_images.TEMPLATES or not key:
+        return _err(404, "No picture for that.")
+    if mentions_minor(key, strict=True):
+        return _err(400, "Pictures must show adults only.")
+    try:
+        png = await option_images.get(api_routes.http_client, set, key, g if g in ("male", "female", "non-binary") else "")
+    except option_images.OptionImageError as e:
+        return _err(503, str(e))
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=2592000"})
 
 
 async def _opening(s: dict, c: dict, storyline_id: int, location: str, situation: str, start: datetime) -> str:
@@ -1426,7 +1450,7 @@ async def _opening(s: dict, c: dict, storyline_id: int, location: str, situation
               + f"\nYour usual opening line, for your voice only: {c['greeting']}\n\n" + SAFETY_RULES)
     ask = (f"Write {c['name']}'s opening message for a new scene. Place: {location or 'your choice'}. "
            f"Time: {_clock_text(_iso(start))}, {_daypart(start)}. "
-           + (f"What's happening: {situation}. " if situation else "")
+           + (f"Scenario: {situation} " if situation else "")
            + f"Set the scene through {c['name']}'s senses and actions, then give {s['username']} something to "
            "answer. 1 to 2 paragraphs. Never speak or act for the user. Write spoken words in \"double quotes\", "
            "actions in *asterisks* and private thoughts in `backticks`. No time tags, no preamble.")
@@ -1634,7 +1658,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         system += f"\nStoryline: {story['title']}" + (f". {story['premise']}" if story["premise"] else "") + "\n"
     if cv["location"] or cv["situation"]:
         system += ("\nThis scene began " + (f"at: {cv['location']}." if cv["location"] else "") +
-                   (f" Situation: {cv['situation']}" if cv["situation"] else "") +
+                   (f" Scenario: {cv['situation']}" if cv["situation"] else "") +
                    " Keep the place's details consistent; people can move elsewhere as the story goes.\n")
     # User-written memories always go in; the newest automatic ones fill the rest.
     mems = await _rows("""SELECT * FROM (SELECT content, said_at, story_time, created_at, source, id FROM memories

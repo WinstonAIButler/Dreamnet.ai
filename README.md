@@ -30,9 +30,16 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   storyline, a new scene) asks where it begins: the character's own home,
   workplace or car from their profile, or places grouped as city nights, old
   money and shadows, danger, escape and everyday. You can search them, write your
-  own place, add what's happening, or press **Surprise me**. The character then
-  writes an opening set in that place, and the scene starts with a marker
-  showing where it is. "Use their usual opening" keeps the saved opening line.
+  own place, or press **Surprise me**. Add a **scenario** (the setup, who you
+  are to each other, what's at stake) and pick the **starting point**: the
+  character speaks first (write their opening, or leave it empty and they write
+  one set in that place) or you do, and they reply to your first message. The
+  scene starts with a marker showing where it is. "Use their usual opening"
+  keeps the saved opening line.
+- **Realistic photos on every choice.** The creator and the place picker show a
+  photorealistic picture on each tile, never emoji or cartoons. They are made
+  once on your own ComfyUI and kept in `PORTRAIT_DIR/options`; without ComfyUI
+  the tiles show their names under the Dreamnet mark.
 - **Detailed character profiles.** Beyond the basics, each character has a
   profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
   piercings, style, scent, voice), personality (temperament, desires, fears,

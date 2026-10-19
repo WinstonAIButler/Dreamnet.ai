@@ -287,14 +287,20 @@
     var dlg = document.createElement("dialog");
     dlg.className = "start-dlg";
     dlg.innerHTML = '<form method="dialog" class="start-form form">' +
-      '<div class="start-head"><h2>Where does it start?</h2><button type="button" class="x" data-close title="Close">×</button></div>' +
+      '<div class="start-head"><h2><img class="brand-mark" src="/static/dreamnet/brand/mark-dark.svg" alt=""> Where does it start?</h2><button type="button" class="x" data-close title="Close">×</button></div>' +
       (o.who ? '<p class="hint">A new scene with ' + esc(o.who) + ". Pick a place or write your own; " + esc(o.who) + " opens the scene there.</p>" : "") +
-      (o.resume ? '<button type="button" class="btn small ghost wide" data-resume>↩ Continue your last scene instead</button>' : "") +
+      (o.resume ? '<button type="button" class="btn small ghost wide" data-resume>Continue your last scene instead</button>' : "") +
       '<input type="search" class="start-search" placeholder="Search places" aria-label="Search places">' +
       '<div class="start-groups"><p class="hint">Loading places…</p></div>' +
       '<label>Place<input name="location" maxlength="300" placeholder="Pick one above, or write your own: a rooftop in Prague, his study, a burning church…"></label>' +
-      '<label>What\'s happening <span class="hint">optional</span><textarea name="situation" rows="2" maxlength="600" placeholder="He just caught you going through his desk."></textarea></label>' +
-      '<div class="row start-actions"><button type="button" class="btn small ghost" data-surprise>🎲 Surprise me</button>' +
+      '<label>Scenario <span class="hint">optional: the setup, who you are to each other, what just happened, what\'s at stake</span>' +
+        '<textarea name="situation" rows="3" maxlength="1500" placeholder="You\'re the accountant who found the second ledger. He knows, and he\'s waiting for you to say it."></textarea></label>' +
+      '<div class="start-first"><span class="lbl-strong">Starting point</span><div class="seg" role="radiogroup" aria-label="Who speaks first">' +
+        '<label><input type="radio" name="first" value="them" checked> ' + esc(o.who || "They") + ' speaks first</label>' +
+        '<label><input type="radio" name="first" value="you"> You speak first</label></div></div>' +
+      '<label><span id="openLbl">Their opening line <span class="hint">optional: leave it empty and ' + esc(o.who || "they") + ' writes it</span></span>' +
+        '<textarea name="opening" rows="3" maxlength="2000" placeholder="*He sets down the glass without looking up.* &quot;You found the door. Most people don\'t.&quot;"></textarea></label>' +
+      '<div class="row start-actions"><button type="button" class="btn small ghost" data-surprise>Surprise me</button>' +
       '<button type="button" class="btn small ghost" data-skip>Use their usual opening</button>' +
       '<button type="submit" class="btn primary" data-go>Start scene</button></div></form>';
     document.body.appendChild(dlg);
@@ -310,18 +316,33 @@
       dlg.querySelector(".start-groups").innerHTML = r.groups.map(function (g) {
         return '<div class="start-group"><h4>' + esc(g.group) + '</h4><div class="start-tiles">' + g.places.map(function (p) {
           all.push(p.place);
-          return '<button type="button" class="start-tile" data-place="' + esc(p.place) + '"><span class="em">' + p.emoji + "</span><span>" + esc(p.place) + "</span></button>";
+          return '<button type="button" class="start-tile" data-place="' + esc(p.place) + '">' + photoSpan("place", p.place) + '<span class="lbl">' + esc(p.place) + "</span></button>";
         }).join("") + "</div></div>";
       }).join("");
+      loadPhotos(dlg);
     }).catch(function () { dlg.querySelector(".start-groups").innerHTML = ""; });
     function choose(place) {
       form.location.value = place;
       dlg.querySelectorAll(".start-tile").forEach(function (t) { t.classList.toggle("on", t.dataset.place === place); });
     }
+    form.addEventListener("change", function (e) {
+      if (e.target.name !== "first") return;
+      var you = form.first.value === "you";
+      document.getElementById("openLbl").innerHTML = you
+        ? 'Your first message <span class="hint">' + esc(o.who || "they") + " replies to it</span>"
+        : 'Their opening line <span class="hint">optional: leave it empty and ' + esc(o.who || "they") + " writes it</span>";
+      form.opening.placeholder = you ? '"I know about the ledger." *You slide it across his desk.*'
+        : '*He sets down the glass without looking up.* "You found the door. Most people don\'t."';
+    });
     function go(extra) {
       var btn = dlg.querySelector("[data-go]");
-      btn.disabled = true; btn.textContent = extra.location || extra.situation ? "Writing the opening…" : "Starting…";
-      o.create(extra).then(function (r) { close(); location.hash = "#/chat/" + r.id; })
+      if (extra.first === "you" && !extra.opening) { toast("Write your first message, or let them speak first.", true); form.opening.focus(); return; }
+      btn.disabled = true;
+      btn.textContent = (extra.location || extra.situation) && !extra.opening ? "Writing the opening…" : "Starting…";
+      o.create(extra).then(function (r) {
+        if (r.awaiting_reply) { try { sessionStorage.setItem("dn.autoreply", String(r.id)); } catch (e) { /* reply on demand instead */ } }
+        close(); location.hash = "#/chat/" + r.id;
+      })
         .catch(function (err) { btn.disabled = false; btn.textContent = "Start scene"; toast(err.message, true); });
     }
     dlg.querySelector(".start-search").oninput = function () {
@@ -342,7 +363,8 @@
     dlg.addEventListener("cancel", function (e) { e.preventDefault(); close(); });
     form.onsubmit = function (e) {
       e.preventDefault();
-      go({ location: form.location.value.trim(), situation: form.situation.value.trim() });
+      go({ location: form.location.value.trim(), situation: form.situation.value.trim(),
+        opening: form.opening.value.trim(), first: form.first.value });
     };
   }
   function newScene(body, who, extraOpts) {
@@ -646,46 +668,77 @@
     "non-binary": ["Ash", "Riven", "Sage", "Wren", "Onyx", "Morgan", "Jude", "Ellis", "Nova", "Raven"]
   };
   var SURNAMES = ["Moretti", "Volkov", "Vale", "Draven", "Castellano", "Blackwood", "Ashford", "Kross", "Sinclair", "Delacroix", "Varga", "Thorne"];
+  // Realistic photos on choice tiles, made once on the user's ComfyUI. Loaded one at a time so the
+  // browser keeps connections free; without ComfyUI the tiles just show their names.
+  var tilePhotos = {}, photosOff = false;
+  function photoUrl(set, key, g) {
+    return "/app/api/option-image?set=" + encodeURIComponent(set) + "&key=" + encodeURIComponent(key) + (g ? "&g=" + encodeURIComponent(g) : "");
+  }
+  function photoSpan(set, key, g) {
+    var url = photoUrl(set, key, g), have = tilePhotos[url];
+    if (photosOff && !have) return "";
+    return '<span class="ph' + (have ? " ready" : "") + '" data-photo="' + esc(url) + '"' + (have ? ' style="background-image:url(' + have + ')"' : "") + "></span>";
+  }
+  var photoQueue = Promise.resolve();
+  function loadPhotos(root) {
+    var spans = [].slice.call(root.querySelectorAll(".ph[data-photo]:not(.ready)"));
+    spans.forEach(function (sp) {
+      photoQueue = photoQueue.then(function () {
+        var url = sp.dataset.photo;
+        if (tilePhotos[url]) { sp.style.backgroundImage = "url(" + tilePhotos[url] + ")"; sp.classList.add("ready"); return; }
+        if (photosOff || !document.body.contains(sp)) return;
+        return fetch(url, { credentials: "same-origin" }).then(function (r) {
+          if (r.status === 503) { photosOff = true; document.querySelectorAll(".ph:not(.ready)").forEach(function (x) { x.remove(); }); return; }
+          if (!r.ok) return;
+          return r.blob().then(function (b) {
+            tilePhotos[url] = URL.createObjectURL(b);
+            document.querySelectorAll('.ph[data-photo="' + url.replace(/"/g, '\\"') + '"]').forEach(function (x) {
+              x.style.backgroundImage = "url(" + tilePhotos[url] + ")"; x.classList.add("ready"); });
+          });
+        }).catch(function () {});
+      });
+    });
+  }
   function wizardSteps() {
-    var t = function (list) { return list.map(function (x) { return { v: x[1], e: x[0] }; }); };
+    var t = function (list) { return list.map(function (x) { return { v: x }; }); };
     return [
-      { key: "gender", title: "Who are they?", pick: "one", need: true, items: t([["♀", "female"], ["♂", "male"], ["⚧", "non-binary"]]) },
+      { key: "gender", title: "Who are they?", pick: "one", need: true, items: t(["female", "male", "non-binary"]) },
       { key: "kind", title: "What are they?", pick: "one", need: true, note: "Supernatural is welcome; they still look like a real person.",
-        items: t([["🧍", "Human"], ["🦇", "Vampire"], ["🧝", "Elf"], ["😈", "Demon"], ["🧚", "Fae"], ["🐺", "Werewolf"], ["🔮", "Witch or warlock"], ["🪽", "Fallen angel"]]),
-        extra: { key: "heritage", title: "Heritage", pick: "one", items: t([["🌏", "East Asian"], ["🌍", "Black"], ["🌍", "White"], ["🌎", "Latino or Latina"],
-          ["🌍", "Arab"], ["🌏", "South Asian"], ["🌍", "Mediterranean"], ["🌍", "Slavic"], ["🌐", "Mixed"]]) },
+        items: t(["Human", "Vampire", "Elf", "Demon", "Fae", "Werewolf", "Witch or warlock", "Fallen angel"]),
+        extra: { key: "heritage", title: "Heritage", pick: "one", items: t(["East Asian", "Black", "White", "Latino or Latina",
+          "Arab", "South Asian", "Mediterranean", "Slavic", "Mixed"]) },
         swatch: { key: "skin", title: "Skin tone" } },
       { key: "hair_style", title: "Hair and eyes", pick: "one", need: true,
-        items: t([["💇", "Long and straight"], ["〰️", "Long and wavy"], ["➰", "Curly"], ["🪢", "Braided"], ["🎀", "Ponytail"], ["🍩", "Bun"],
-          ["✂️", "Short"], ["⚡", "Pixie cut"], ["🪒", "Buzzed"], ["🖤", "Slicked back"], ["🌪️", "Messy"], ["🌀", "Locs"]]),
+        items: t(["Long and straight", "Long and wavy", "Curly", "Braided", "Ponytail", "Bun",
+          "Short", "Pixie cut", "Buzzed", "Slicked back", "Messy", "Locs"]),
         swatch: { key: "hair", title: "Hair colour" }, swatch2: { key: "eyes", title: "Eye colour" } },
       { key: "build", title: "Body", pick: "one", need: true,
-        items: t([["🩰", "Slim"], ["🏃", "Lean"], ["🤸", "Athletic"], ["⏳", "Curvy"], ["🍑", "Voluptuous"], ["💪", "Muscular"], ["🧱", "Broad-shouldered"], ["🌺", "Full-figured"]]),
-        extra: { key: "height", title: "Height", pick: "one", items: t([["🔹", "Petite"], ["🔷", "Average height"], ["⬆️", "Tall"], ["🗼", "Towering"]]) } },
+        items: t(["Slim", "Lean", "Athletic", "Curvy", "Voluptuous", "Muscular", "Broad-shouldered", "Full-figured"]),
+        extra: { key: "height", title: "Height", pick: "one", items: t(["Petite", "Average height", "Tall", "Towering"]) } },
       { key: "name", title: "Name, age and voice", form: true },
       { key: "personality", title: "Personality", pick: 3, need: true, note: "Pick up to three.",
-        items: t([["😏", "Seductive"], ["🙈", "Shy"], ["🍯", "Sweet"], ["😜", "Playful"], ["🔥", "Passionate"], ["🧭", "Adventurous"], ["😎", "Confident"],
-          ["✨", "Charming"], ["💬", "Witty"], ["👑", "Dominant"], ["🕊️", "Submissive"], ["😈", "Mischievous"], ["🤍", "Caring"], ["💅", "Sassy"],
-          ["😤", "Tsundere"], ["🔪", "Yandere"], ["⚡", "Intense"], ["🌙", "Mysterious"], ["📚", "Intellectual"], ["🔗", "Possessive"],
-          ["🧊", "Cold"], ["🌧️", "Brooding"], ["🗡️", "Ruthless"], ["🛡️", "Protective"]]) },
+        items: t(["Seductive", "Shy", "Sweet", "Playful", "Passionate", "Adventurous", "Confident",
+          "Charming", "Witty", "Dominant", "Submissive", "Mischievous", "Caring", "Sassy",
+          "Tsundere", "Yandere", "Intense", "Mysterious", "Intellectual", "Possessive",
+          "Cold", "Brooding", "Ruthless", "Protective"]) },
       { key: "job", title: "Occupation", pick: "one", custom: true,
-        items: t([["🎩", "Mafia boss"], ["🐻", "Bratva enforcer"], ["🗡️", "Assassin"], ["🕶️", "Bodyguard"], ["💼", "Billionaire CEO"], ["🔍", "Detective"],
-          ["🩺", "Doctor"], ["💉", "Nurse"], ["⚖️", "Lawyer"], ["🎨", "Artist"], ["🍸", "Bartender"], ["🖋️", "Tattoo artist"], ["🎸", "Musician"],
-          ["📸", "Model"], ["💃", "Dancer"], ["⛓️", "Dominatrix"], ["🎓", "Professor"], ["🔪", "Chef"], ["🎖️", "Soldier"], ["💻", "Hacker"],
-          ["🗝️", "Thief"], ["🏎️", "Street racer"], ["👑", "Royal heir"], ["🕯️", "Priest or priestess"], ["🏥", "Surgeon"], ["📰", "Journalist"]]) },
+        items: t(["Mafia boss", "Bratva enforcer", "Assassin", "Bodyguard", "Billionaire CEO", "Detective",
+          "Doctor", "Nurse", "Lawyer", "Artist", "Bartender", "Tattoo artist", "Musician",
+          "Model", "Dancer", "Dominatrix", "Professor", "Chef", "Soldier", "Hacker",
+          "Thief", "Street racer", "Royal heir", "Priest or priestess", "Surgeon", "Journalist"]) },
       { key: "relationship", title: "Who are they to you?", pick: "one", custom: true,
-        items: t([["❓", "Stranger"], ["❤️", "Lover"], ["💘", "Crush"], ["💔", "Ex"], ["⚔️", "Rival"], ["🗂️", "Boss"], ["🤝", "Colleague"], ["🏘️", "Neighbor"],
-          ["🛋️", "Roommate"], ["🕶️", "Your bodyguard"], ["⛓️", "Captor"], ["💍", "Arranged marriage"], ["🎭", "Fake dating"], ["🗡️", "Enemy"],
-          ["💌", "Secret admirer"], ["👋", "Friend"], ["🧭", "Mentor"], ["📜", "Owes you a debt"], ["💸", "You owe them"]]) },
+        items: t(["Stranger", "Lover", "Crush", "Ex", "Rival", "Boss", "Colleague", "Neighbor",
+          "Roommate", "Your bodyguard", "Captor", "Arranged marriage", "Fake dating", "Enemy",
+          "Secret admirer", "Friend", "Mentor", "Owes you a debt", "You owe them"]) },
       { key: "hobbies", title: "Hobbies", pick: 3, note: "Optional. Pick up to three.", custom: true,
-        items: t([["🎮", "Gaming"], ["📷", "Photography"], ["🧘", "Yoga"], ["📖", "Reading"], ["🎤", "Singing"], ["🧁", "Baking"], ["🥋", "Martial arts"],
-          ["💃", "Dancing"], ["🍳", "Cooking"], ["🎭", "Cosplay"], ["🏋️", "Weightlifting"], ["✍️", "Writing"], ["🌿", "Gardening"], ["🖌️", "Painting"],
-          ["🏊", "Swimming"], ["🥾", "Hiking"], ["🎸", "Playing guitar"], ["🏃", "Running"], ["🧗", "Rock climbing"], ["♟️", "Chess"], ["🍷", "Wine"],
-          ["🏍️", "Motorcycles"], ["🎯", "Shooting"], ["🃏", "Poker"]]) },
+        items: t(["Gaming", "Photography", "Yoga", "Reading", "Singing", "Baking", "Martial arts",
+          "Dancing", "Cooking", "Cosplay", "Weightlifting", "Writing", "Gardening", "Painting",
+          "Swimming", "Hiking", "Playing guitar", "Running", "Rock climbing", "Chess", "Wine",
+          "Motorcycles", "Shooting", "Poker"]) },
       { key: "turn_ons", title: "Turn-ons", pick: 4, note: "Optional. Pick up to four; only between consenting adults.", custom: true,
-        items: t([["👙", "Lingerie"], ["🎭", "Roleplay"], ["👠", "High heels"], ["🧦", "Stockings"], ["👑", "Being in control"], ["🕊️", "Giving up control"],
-          ["🖐️", "Spanking"], ["🎗️", "Collars"], ["🖤", "Latex"], ["🌹", "Slow and tender"], ["🗣️", "Praise"], ["🙊", "Teasing"], ["🔥", "Jealousy"],
-          ["🪢", "Restraints"], ["👀", "Being watched"], ["💪", "Muscle worship"], ["🦶", "Feet"], ["🍦", "Vanilla"]]) }
+        items: t(["Lingerie", "Roleplay", "High heels", "Stockings", "Being in control", "Giving up control",
+          "Spanking", "Collars", "Latex", "Slow and tender", "Praise", "Teasing", "Jealousy",
+          "Restraints", "Being watched", "Muscle worship", "Feet", "Vanilla"]) }
     ];
   }
   function viewGuidedCreate() {
@@ -695,7 +748,8 @@
     function tiles(st) {
       return '<div class="wiz-tiles">' + st.items.map(function (it) {
         var on = chosen(st.key).indexOf(it.v) >= 0;
-        return '<button type="button" class="wiz-tile' + (on ? " on" : "") + '" data-k="' + st.key + '" data-v="' + esc(it.v) + '"><span class="em">' + it.e + "</span><span>" + esc(it.v.charAt(0).toUpperCase() + it.v.slice(1)) + "</span></button>";
+        return '<button type="button" class="wiz-tile' + (on ? " on" : "") + '" data-k="' + st.key + '" data-v="' + esc(it.v) + '">' +
+          photoSpan(st.key, it.v, st.key === "gender" ? "" : picks.gender) + '<span class="lbl">' + esc(it.v.charAt(0).toUpperCase() + it.v.slice(1)) + "</span></button>";
       }).join("") + "</div>";
     }
     function swatches(sw) {
@@ -714,7 +768,7 @@
         var acc = [["", "Pick later"], ["irish", "Irish"], ["french", "French"], ["german", "German"], ["nordic", "Nordic"], ["italian", "Italian"], ["russian", "Russian"]];
         var snd = [["innocent", "Innocent"], ["mysterious", "Mysterious"], ["villain", "Villain"], ["possessed", "Possessed"]];
         body = '<div class="wiz-name"><label>Character name<div class="row"><input id="wName" maxlength="60" value="' + esc(picks.name || "") + '" placeholder="Name">' +
-          '<button type="button" class="btn small ghost" id="wRandom" title="Random name">🎲</button></div></label>' +
+          '<button type="button" class="btn small ghost" id="wRandom" title="Random name">Random</button></div></label>' +
           '<label>Age <span class="hint">18 or older</span><div class="wiz-age"><button type="button" class="btn small ghost" data-age="-1">‹</button>' +
           '<input id="wAge" type="number" min="18" max="9999" value="' + picks.age + '"><button type="button" class="btn small ghost" data-age="1">›</button></div></label></div>' +
           '<h4 class="wiz-sub">Voice accent <span class="hint">every accent speaks English</span></h4><div class="choices">' + acc.map(function (a) {
@@ -730,12 +784,13 @@
           (st.swatch ? swatches(st.swatch) : "") + (st.swatch2 ? swatches(st.swatch2) : "");
       }
       view.innerHTML = '<div class="wizard panel form">' +
-        '<div class="wiz-top"><span class="hint">Step ' + (at + 1) + " of " + steps.length + '</span><a class="hint" href="#/character/new/full">Skip to the full form</a></div>' +
+        '<div class="wiz-top"><span class="hint"><img class="brand-mark" src="/static/dreamnet/brand/mark-dark.svg" alt=""> Step ' + (at + 1) + " of " + steps.length + '</span><a class="hint" href="#/character/new/full">Skip to the full form</a></div>' +
         '<div class="wiz-dots">' + steps.map(function (s2, i) { return '<span class="' + (i < at ? "done" : i === at ? "now" : "") + '"></span>'; }).join("") + "</div>" +
         "<h2>" + esc(st.title) + "</h2>" + body +
         '<div class="row wiz-nav">' + (at ? '<button type="button" class="btn ghost" id="wBack">← Back</button>' : "") +
         '<button type="button" class="btn primary" id="wNext"' + (ready(st) ? "" : " disabled") + ">" + (at === steps.length - 1 ? "Create character →" : "Next →") + "</button></div></div>";
       wire(st);
+      loadPhotos(view);
     }
     function wire(st) {
       var w = view.querySelector(".wizard"), next = document.getElementById("wNext");
@@ -1125,7 +1180,7 @@
           return head + '<div class="msg ' + m.role + '">' + (m.role === "assistant" ? avatar(c) : "") +
             '<div class="bubble-wrap"><div class="bubble' + (m.typing ? " typing" : "") + '">' + rp(stripTimeTags(m.content, m.typing)) +
             (m.role === "assistant" && m.story_at ? '<button type="button" class="now" data-settime="' + m.id + '" title="Change this time">' + esc(nowLine(m.story_at, start)) + "</button>" : "") + "</div>" +
-            (m.picturing ? '<div class="scene-pic busy"><span>🎨 Picturing this moment…</span></div>' :
+            (m.picturing ? '<div class="scene-pic busy"><span><img class="brand-mark" src="/static/dreamnet/brand/mark-dark.svg" alt=""> Picturing this moment…</span></div>' :
               m.image ? '<figure class="scene-pic"><a href="' + esc(m.image) + '" target="_blank" rel="noopener" title="Open full size"><img src="' + esc(m.image) + '" alt="Picture of this moment" loading="lazy"></a>' +
                 '<figcaption><button data-picture="' + i + '">↻ New picture</button><button data-picprompt="' + i + '">✎ Edit prompt</button><button data-picdel="' + i + '">× Remove</button></figcaption></figure>' : "") +
             (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
@@ -1140,6 +1195,10 @@
         msgs.scrollTop = keepScroll ? top : msgs.scrollHeight;
       }
       render();
+      // The user opened the scene from the place picker: get the character's reply to it now.
+      var auto = null;
+      try { auto = sessionStorage.getItem("dn.autoreply"); sessionStorage.removeItem("dn.autoreply"); } catch (e) { /* none */ }
+      if (auto === String(convId) && list.length && list[list.length - 1].role === "user") setTimeout(function () { send(""); }, 0);
 
       // A picture of one moment: that message drives the action, the server adds what's known about everyone in it.
       function makePicture(m, promptText) {
