@@ -10,3 +10,4 @@ proxy.db
 *.bak
 portraits/
 .venv/
+tts_cache/

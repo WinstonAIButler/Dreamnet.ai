@@ -16,8 +16,142 @@
   }
 
   // Role-play text: *actions* in italics, everything else escaped.
+  // Roleplay text: "spoken words", *actions* and `thoughts` (or ((thoughts))) each get their own font and color.
+  var RP_PARTS = /(`[^`\n]+`|\(\([^\n]+?\)\)|\*[^*\n]+\*|"[^"\n]+"|\u201c[^\u201d\n]+\u201d)/g;
   function rp(s) {
-    return esc(s).replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    return String(s == null ? "" : s).split(RP_PARTS).map(function (part, i) {
+      if (i % 2 === 0) return esc(part);
+      var c = part.charAt(0);
+      if (c === "`") return '<span class="rp-thought">' + esc(part.slice(1, -1)) + "</span>";
+      if (c === "(") return '<span class="rp-thought">' + esc(part.slice(2, -2)) + "</span>";
+      if (c === "*") return '<em class="rp-action">' + esc(part.slice(1, -1)) + "</em>";
+      return '<span class="rp-speech">' + esc(part) + "</span>";
+    }).join("");
+  }
+
+  // ---------- read aloud ----------
+  // Neural voices come from the server (English voices by country); if it can't
+  // reach the online voice service, the device's own English voices are used.
+  var voiceInfo = null, player = null, onlineFailed = false;
+  function pref(k, d) { try { var v = localStorage.getItem("dn." + k); return v == null ? d : v; } catch (e) { return d; } }
+  function setPref(k, v) { try { localStorage.setItem("dn." + k, v); } catch (e) { /* private mode */ } }
+  function loadVoices() {
+    if (!voiceInfo) voiceInfo = api("/app/api/voices").catch(function () { return { enabled: false, regions: [], voices: [], tones: [], defaults: {} }; });
+    return voiceInfo;
+  }
+  function deviceVoices() {
+    return (window.speechSynthesis ? speechSynthesis.getVoices() : []).filter(function (v) { return /^en[-_]/i.test(v.lang); });
+  }
+  var TONE_PITCH = { deep: 0.75, low: 0.88, natural: 1, bright: 1.15 };
+  function speakableText(text, mode) {
+    text = stripTimeTags(text);
+    var out = [];
+    String(text).split(RP_PARTS).forEach(function (p, i) {
+      if (!p.trim()) return;
+      var c = p.charAt(0), kind = i % 2 === 0 ? "narration" : c === "`" || c === "(" ? "thought" : c === "*" ? "action" : "speech";
+      if (kind === "thought") p = p.replace(/^[`(]+|[`)]+$/g, "");
+      if (kind === "action") p = p.replace(/^\*|\*$/g, "");
+      if (mode === "words" && kind !== "speech") return;
+      if (mode === "words_thoughts" && kind !== "speech" && kind !== "thought") return;
+      out.push(p.trim());
+    });
+    return out.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function stopSpeaking() {
+    if (player) { player.pause(); player = null; }
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    document.querySelectorAll("[data-listen].playing").forEach(function (b) { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
+  }
+  function voiceFor(c) {
+    return { voice: c.voice || "", tone: c.voice_tone || "natural", rate: +c.voice_rate || 0, gender: c.gender };
+  }
+  // Speak text as a character's voice; resolves when it finishes.
+  function speak(text, v, onEnd) {
+    stopSpeaking();
+    var mode = pref("readMode", "all");
+    return loadVoices().then(function (info) {
+      var id = v.voice || (info.defaults || {})[v.gender] || "en-US-AvaNeural";
+      if (id.indexOf("device:") === 0 || !info.enabled || onlineFailed) return speakOnDevice(speakableText(text, mode), id, v, onEnd);
+      return fetch("/app/api/tts", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, voice: id, tone: v.tone, rate: v.rate, mode: mode }) })
+        .then(function (r) {
+          if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) { throw new Error(d.error || "Voice unavailable"); });
+          return r.blob();
+        })
+        .then(function (blob) {
+          var a = new Audio(URL.createObjectURL(blob));
+          player = a;
+          a.onended = function () { if (player === a) player = null; if (onEnd) onEnd(); };
+          return a.play();
+        })
+        .catch(function (e) {
+          if (e.name === "NotAllowedError") { toast("Tap Listen to hear it; your browser blocked autoplay.", true); if (onEnd) onEnd(); return; }
+          onlineFailed = true;
+          toast("Couldn't reach the online voices, so this device's voice is reading instead.", true);
+          return speakOnDevice(speakableText(text, mode), id, v, onEnd);
+        });
+    });
+  }
+  function speakOnDevice(text, id, v, onEnd) {
+    if (!window.speechSynthesis || !text) { if (onEnd) onEnd(); return; }
+    var list = deviceVoices(), pick = null;
+    if (id.indexOf("device:") === 0) pick = list.filter(function (x) { return x.name === id.slice(7); })[0];
+    if (!pick) {
+      var lang = id.slice(0, 5).toLowerCase();
+      var same = list.filter(function (x) { return x.lang.replace("_", "-").toLowerCase().indexOf(lang) === 0; });
+      pick = same[0] || list[0];
+    }
+    var u = new SpeechSynthesisUtterance(text);
+    if (pick) { u.voice = pick; u.lang = pick.lang; }
+    u.pitch = TONE_PITCH[v.tone] || 1;
+    u.rate = Math.max(0.5, Math.min(1.5, 1 + (v.rate || 0) / 100));
+    u.onend = function () { if (onEnd) onEnd(); };
+    speechSynthesis.speak(u);
+  }
+  if (window.speechSynthesis) speechSynthesis.onvoiceschanged = function () { /* list fills in later on some browsers */ };
+
+  function voiceSection(c) {
+    return '<fieldset class="voice-box"><legend>Voice <span class="hint">how ' + esc(c.name || "they") + ' sound when replies are read aloud</span></legend>' +
+      '<div class="two"><label>Country<select name="voice_region"></select></label>' +
+      '<label>Voice<select name="voice"></select></label></div>' +
+      '<div class="two"><label>Tone<select name="voice_tone">' + ["deep", "low", "natural", "bright"].map(function (t) {
+        return '<option value="' + t + '"' + ((c.voice_tone || "natural") === t ? " selected" : "") + ">" + t.charAt(0).toUpperCase() + t.slice(1) + "</option>"; }).join("") + "</select></label>" +
+      '<label>Speed <span class="hint" id="rateShow"></span><input type="range" name="voice_rate" min="-30" max="30" step="5" value="' + (+c.voice_rate || 0) + '"></label></div>' +
+      '<div class="row"><button type="button" class="btn small" id="voicePreview">▶ Preview voice</button><span class="hint" id="voiceNote"></span></div></fieldset>';
+  }
+  function wireVoiceSection(form, c) {
+    loadVoices().then(function (info) {
+      var regionSel = form.voice_region, voiceSel = form.voice;
+      var current = c.voice || (info.defaults || {})[form.gender.value] || "en-US-AvaNeural";
+      var curRegion = current.indexOf("device:") === 0 ? (deviceVoices().filter(function (v) { return v.name === current.slice(7); })[0] || { lang: "en-US" }).lang.replace("_", "-").slice(0, 5) : current.slice(0, 5);
+      regionSel.innerHTML = info.regions.map(function (r) {
+        return '<option value="' + r[0] + '"' + (r[0] === curRegion ? " selected" : "") + ">" + esc(r[1]) + "</option>"; }).join("");
+      function fill() {
+        var reg = regionSel.value, groups = { male: [], female: [] };
+        info.voices.forEach(function (v) { if (v.region === reg) groups[v.gender].push(v); });
+        var dev = deviceVoices().filter(function (v) { return v.lang.replace("_", "-").toLowerCase().indexOf(reg.toLowerCase()) === 0; });
+        voiceSel.innerHTML = ["female", "male"].map(function (g) {
+          return groups[g].length ? '<optgroup label="' + (g === "male" ? "Male" : "Female") + '">' + groups[g].map(function (v) {
+            return '<option value="' + v.id + '"' + (v.id === current ? " selected" : "") + ">" + esc(v.name) + "</option>"; }).join("") + "</optgroup>" : "";
+        }).join("") + (dev.length ? '<optgroup label="On this device (works offline)">' + dev.map(function (v) {
+          var val = "device:" + v.name;
+          return '<option value="' + esc(val) + '"' + (val === current ? " selected" : "") + ">" + esc(v.name) + "</option>"; }).join("") + "</optgroup>" : "");
+        if (voiceSel.value !== current) {  // new country: start on a voice that matches the character's gender
+          var g = form.gender.value === "male" ? "male" : "female";
+          voiceSel.value = (groups[g][0] || groups.female[0] || groups.male[0] || {}).id || voiceSel.value;
+        }
+      }
+      regionSel.onchange = function () { fill(); current = voiceSel.value; };
+      voiceSel.onchange = function () { current = voiceSel.value; };
+      fill();
+      if (!info.enabled) document.getElementById("voiceNote").textContent = "Online voices aren't installed; device voices will be used.";
+      function showRate() { var r = +form.voice_rate.value; document.getElementById("rateShow").textContent = r === 0 ? "normal" : (r > 0 ? "+" : "") + r + "%"; }
+      form.voice_rate.oninput = showRate; showRate();
+      document.getElementById("voicePreview").onclick = function () {
+        var sample = form.greeting.value.trim() || '"' + "You found me. I wondered how long it would take." + '"';
+        speak(sample, { voice: voiceSel.value, tone: form.voice_tone.value, rate: +form.voice_rate.value, gender: form.gender.value });
+      };
+    });
   }
 
   function api(path, opts) {
@@ -321,6 +455,7 @@
         '<div class="two"><label>Tags <span class="hint">comma separated</span><input name="tags" value="' + esc(c.tags) + '"></label>' +
         '<label>Portrait URL <span class="hint">optional, a photo-realistic image</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
         portraitSection(id, c) +
+        voiceSection(c) +
         '<p class="form-error" id="charErr"></p>' +
         '<div class="row"><button class="btn primary">' + (id ? "Save changes" : "Create character") + "</button>" +
         (id ? '<button type="button" class="btn ghost danger" id="delChar">Delete</button>' : "") + "</div>" +
@@ -331,6 +466,7 @@
         document.getElementById("pv").innerHTML = avatar(d) + '<div class="info"><h3>' + esc(d.name) + " <small>" + esc(d.age) + "</small></h3><p>" + esc(d.tagline) + "</p></div>";
       }
       form.oninput = preview; preview();
+      wireVoiceSection(form, c);
       form.querySelectorAll("[data-trait]").forEach(function (b) {
         b.onclick = function () {
           var t = b.getAttribute("data-trait");
@@ -342,7 +478,7 @@
       form.onsubmit = function (e) {
         e.preventDefault();
         var body = { id: id };
-        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar"].forEach(function (k) { body[k] = form[k].value; });
+        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate"].forEach(function (k) { body[k] = form[k].value; });
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { toast("Saved"); location.hash = "#/characters"; })
           .catch(function (err) { document.getElementById("charErr").textContent = err.message; });
@@ -355,7 +491,7 @@
         status.textContent = promptEl.value.trim() ? "Generating the portrait…" : "Writing a photo prompt, then generating…";
         // Save the card first so the prompt is written from what's on screen.
         var body = { id: id };
-        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar"].forEach(function (k) { body[k] = form[k].value; });
+        ["name", "age", "gender", "color", "tagline", "persona", "appearance", "greeting", "tags", "avatar", "voice", "voice_tone", "voice_rate"].forEach(function (k) { body[k] = form[k].value; });
         api("/app/api/characters", { method: "POST", body: body })
           .then(function () { return api("/app/api/characters/" + id + "/portrait", { method: "POST", body: { prompt: promptEl.value } }); })
           .then(function (r) {
@@ -395,7 +531,7 @@
     setNav("chats");
     view.className = "page-chat";
     var ctrl = null;
-    cleanup = function () { if (ctrl) ctrl.abort(); };
+    cleanup = function () { if (ctrl) ctrl.abort(); stopSpeaking(); };
     Promise.all([api("/app/api/conversations"), convId ? api("/app/api/conversations/" + convId) : null,
       api("/app/api/storylines"), api("/app/api/characters")]).then(function (r) {
       var convs = r[0], conv = r[1], stories = r[2], chars = r[3];
@@ -470,10 +606,16 @@
         (conv.storyline ? esc(conv.storyline.title) : esc(c.tagline)) +
         (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div>" +
         '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">🕒 <span id="clockNow"></span></button>' +
+        '<button class="btn small" id="voiceBtn" title="Read aloud">🔊</button>' +
         '<button class="btn small" id="memBtn" title="What ' + esc(c.name) + ' remembers">Memory</button>' +
         '<button class="btn small" id="newScene" title="A new scene in this storyline, starting at its current time">New scene</button>' +
         '<button class="btn small ghost" id="delConv" title="Delete this scene">🗑</button></div>' +
         '<div class="memory-panel" id="memPanel" hidden></div>' +
+        '<div class="voice-panel" id="voicePanel" hidden>' +
+        '<label class="check-line"><input type="checkbox" id="autoRead"> Read ' + esc(c.name) + "'s replies aloud as they arrive</label>" +
+        '<label>Read<select id="readMode"><option value="all">everything (words, actions, thoughts)</option>' +
+        '<option value="words_thoughts">spoken words and thoughts</option><option value="words">spoken words only</option></select></label>' +
+        '<a class="btn small ghost" href="#/character/' + c.id + '">Change ' + esc(c.name) + "'s voice</a></div>" +
         '<form class="clock-panel" id="clockPanel" hidden>' +
         '<label>Set the clock to<input type="datetime-local" id="clockSet"></label>' +
         '<label>or skip ahead<span class="row"><input type="number" id="skipH" min="0" max="672" placeholder="0"> h ' +
@@ -484,9 +626,10 @@
         '<div id="sceneRules"></div><button type="button" class="btn small" id="srAdd">+ Add rule</button> ' +
         '<button type="button" class="btn small" id="srSave">Save scene rules</button></div></form>' +
         '<div class="messages" id="msgs"></div>' +
-        '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Write your reply. *Asterisks* for actions. Add [Time: 45 min] or [Time: 03:15 AM] to set how long it takes."></textarea>' +
+        '<form class="composer" id="composer"><textarea id="input" rows="1" placeholder="Reply with &quot;words&quot;, *actions* and `thoughts`. Add [Time: 45 min] to set how long it takes."></textarea>' +
         '<button class="btn primary" id="sendBtn">Send</button></form>' +
-        '<p class="notice">' + esc(c.name) + " is an AI character. Every character is a fictional adult.</p>" +
+        '<p class="notice rp-legend"><span class="rp-speech">"Words"</span><em class="rp-action">actions</em><span class="rp-thought">thoughts</span>' +
+        "<span>" + esc(c.name) + " is an AI character. Every character is a fictional adult.</span></p>" +
         "</section></div>";
       wireSidebar();
       document.getElementById("sideBtn").onclick = function () { view.querySelector(".chat-layout").classList.toggle("show-side"); };
@@ -520,6 +663,7 @@
             (m.role === "assistant" && m.story_at ? '<button type="button" class="now" data-settime="' + m.id + '" title="Change this time">' + esc(nowLine(m.story_at, start)) + "</button>" : "") + "</div>" +
             (m.id && !m.typing ? '<div class="msg-tools">' + (m.role === "user" && m.story_at ? '<time class="story" title="In-story time">🕒 ' + esc(storyClock(m.story_at, start)) + "</time>" : "") +
               '<time title="Written ' + esc(stamp(ts)) + '">' + esc(clock(ts)) + "</time>" +
+              (m.role === "assistant" ? '<button data-listen="' + i + '">🔊 Listen</button>' : "") +
               (m.role === "assistant" && isLast && i > 0 ? '<button data-regen="' + m.id + '">↻ Regenerate</button>' : "") +
               (conv.novel && m.role === "assistant" ? '<button data-tochapter="' + i + '">＋ Add to chapter</button>' : "") +
               (i > 0 ? '<button data-rewind="' + m.id + '">Rewind to here</button>' : "") + "</div>" : "") +
@@ -542,6 +686,8 @@
           return api("/app/api/conversations/" + convId);
         }).then(function (fresh) {
           list = fresh.messages; render();
+          var last = list[list.length - 1];
+          if (pref("autoRead", "0") === "1" && last && last.role === "assistant") speak(last.content, voiceFor(c));
         }).catch(function (e) {
           if (e.name === "AbortError") return;
           list.pop(); render(); toast(e.message, true);
@@ -570,6 +716,11 @@
           api("/app/api/messages/" + b.dataset.rewind, { method: "DELETE" }).then(function () {
             list = list.filter(function (m) { return m.id < +b.dataset.rewind; }); render();
           });
+        } else if (b.dataset.listen) {
+          if (b.classList.contains("playing")) { stopSpeaking(); return; }
+          var idx = +b.dataset.listen;
+          speak(list[idx].content, voiceFor(c), function () { b.classList.remove("playing"); b.textContent = "🔊 Listen"; });
+          b.classList.add("playing"); b.textContent = "■ Stop";
         } else if (b.dataset.settime) {
           var v = prompt("When does this reply end? Type a time (03:15 AM) or how long it took (45 min, 2 hours). Later messages move with it.");
           if (!v || !v.trim()) return;
@@ -585,6 +736,18 @@
           addToChapter(conv.novel.id, list[+b.dataset.tochapter].content);
         }
       };
+      var voicePanel = document.getElementById("voicePanel");
+      document.getElementById("voiceBtn").onclick = function () { voicePanel.hidden = !voicePanel.hidden; };
+      var autoRead = document.getElementById("autoRead"), readMode = document.getElementById("readMode");
+      autoRead.checked = pref("autoRead", "0") === "1";
+      readMode.value = pref("readMode", "all");
+      document.getElementById("voiceBtn").classList.toggle("on", autoRead.checked);
+      autoRead.onchange = function () {
+        setPref("autoRead", autoRead.checked ? "1" : "0");
+        document.getElementById("voiceBtn").classList.toggle("on", autoRead.checked);
+        if (!autoRead.checked) stopSpeaking();
+      };
+      readMode.onchange = function () { setPref("readMode", readMode.value); };
       var clockPanel = document.getElementById("clockPanel");
       var sceneRules = (conv.time_rules || []).slice();
       function drawSceneRules() {
@@ -740,7 +903,7 @@
       var ch = n.chapters[n.chapters.length - 1];
       if (!ch) return toast("That novel has no chapters", true);
       return api("/app/api/chapters/" + ch.id).then(function (full) {
-        var content = (full.content.trim() ? full.content.replace(/\s*$/, "\n\n") : "") + text.replace(/\*([^*\n]+)\*/g, "$1");
+        var content = (full.content.trim() ? full.content.replace(/\s*$/, "\n\n") : "") + text.replace(/\*([^*\n]+)\*/g, "$1").replace(/`([^`\n]+)`|\(\(([^\n]+?)\)\)/g, function (m, a, b) { return "*" + (a || b) + "*"; });
         return api("/app/api/chapters/" + ch.id, { method: "PUT", body: { content: content } });
       }).then(function () { toast("Added to " + ch.title); });
     }).catch(function (e) { toast(e.message, true); });

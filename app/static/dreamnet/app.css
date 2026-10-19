@@ -141,10 +141,8 @@ main { flex: 1; width: 100%; max-width: 1240px; margin: 0 auto; padding: 24px; }
 .msg { display: flex; gap: 10px; max-width: 78%; }
 .msg .avatar { width: 34px; height: 34px; font-size: 13px; }
 .bubble { padding: 10px 14px; border-radius: 18px; background: var(--card); white-space: pre-wrap; word-wrap: break-word; }
-.bubble em { color: #e3b8df; }
 .msg.user { align-self: flex-end; flex-direction: row-reverse; }
-.msg.user .bubble { background: var(--grad); color: var(--on-accent); }
-.msg.user .bubble em { color: rgba(3,18,47,.78); }
+.msg.user .bubble { background: linear-gradient(135deg, #413B61, #19305C); border: 1px solid rgba(241,145,109,.45); }
 .typing::after { content: "▍"; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
@@ -424,3 +422,22 @@ a.card.new { text-decoration: none; }
 }
 .sidebar h4 { display: flex; align-items: center; justify-content: space-between; }
 .side-close { background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; line-height: 1; }
+
+/* Roleplay text: narration, spoken words, actions and thoughts */
+:root { --rp-speech: #F3DADF; --rp-action: #dcb3d9; --rp-thought: #F1916D; --rp-narration: #d9c2cf; }
+.bubble { color: var(--rp-narration); }
+.rp-speech { font-family: var(--prose); color: var(--rp-speech); }
+.rp-action { font-family: var(--serif); font-style: italic; font-weight: 500; font-size: 1.15em; color: var(--rp-action); }
+.rp-thought { font-family: Inter, system-ui, sans-serif; font-style: italic; font-weight: 300; font-size: .92em; color: var(--rp-thought); letter-spacing: .01em; }
+.rp-legend { display: flex; gap: 14px; justify-content: center; font-size: 12px; color: var(--muted); }
+.rp-legend .rp-speech, .rp-legend .rp-action, .rp-legend .rp-thought { font-size: 13px; }
+
+/* Read aloud */
+.voice-box { border: 1px solid var(--line); border-radius: 16px; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; margin: 0; }
+.voice-box legend { font-weight: 600; font-size: 14px; padding: 0 6px; }
+.voice-box input[type=range] { accent-color: var(--accent); }
+.voice-panel { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 14px; }
+.voice-panel label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.voice-panel select { background: var(--bg-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; font: inherit; }
+#voiceBtn.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.msg-tools button.playing { color: var(--accent); opacity: 1; }

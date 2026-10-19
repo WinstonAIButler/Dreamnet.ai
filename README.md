@@ -51,6 +51,17 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   click any [Current Time] line to correct it; later messages move with it. Use the clock button in a
   scene to set the time, skip ahead or label a moment ("The next morning, his
   penthouse").
+- **Read aloud.** Each character has a voice: pick a country (United States,
+  United Kingdom, Australia, Canada, Ireland, New Zealand, South Africa, India,
+  Singapore, the Philippines, Nigeria, Kenya, Tanzania, Hong Kong), a male or
+  female voice from that country, a tone (deep, low, natural, bright) and a
+  speed. Press **Listen** on any reply, or turn on auto-read with the 🔊 button.
+  Choose whether to read everything, spoken words and thoughts, or spoken words
+  only. All voices are English. They use Microsoft Edge's online Read Aloud
+  voices through `edge-tts`, so they need internet; offline, the English voices
+  installed on your computer read instead.
+- **Styled roleplay text.** Spoken "words", *actions* and `thoughts` each have
+  their own font and colour, and the characters are told to write that way.
 - **Lifelike portraits.** One click turns a character card into a photorealistic
   portrait, using the Z-Image-Turbo workflow from Intel AI Playground on your
   own ComfyUI.

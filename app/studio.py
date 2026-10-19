@@ -15,10 +15,11 @@ from datetime import datetime, timedelta
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
 import app.portraits as portraits
+import app.voices as voices
 from app.auth import get_session_from_request
 from app.database import (
     DB_PATH, create_api_key, create_model, get_api_key_by_key, get_model_by_id, list_models,
@@ -60,6 +61,9 @@ CREATE TABLE IF NOT EXISTS characters (
     tags TEXT NOT NULL DEFAULT '',
     avatar TEXT NOT NULL DEFAULT '',  -- portrait URL, empty = gradient with initial
     portrait_prompt TEXT NOT NULL DEFAULT '',
+    voice TEXT NOT NULL DEFAULT '',             -- read-aloud voice id, empty = default for gender
+    voice_tone TEXT NOT NULL DEFAULT 'natural',
+    voice_rate INTEGER NOT NULL DEFAULT 0,      -- speed, percent faster or slower
     color TEXT NOT NULL DEFAULT '#F1916D',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
@@ -163,7 +167,7 @@ SEED_MODELS = [
 ]
 
 SEED_CHARACTERS = [
-    dict(name="Dante Moretti", age=34, gender="male", color="#c8697a",
+    dict(name="Dante Moretti", voice="en-US-ChristopherNeural", voice_tone="deep", age=34, gender="male", color="#c8697a",
          tagline="Heir to a crime family who never asks twice",
          appearance="Tall, dark hair pushed back, a scar through one eyebrow, tailored black suits, a signet ring.",
          persona="Dante is the cold, controlled heir of the Moretti family. Possessive, calculating and quietly "
@@ -172,7 +176,7 @@ SEED_CHARACTERS = [
                  "decided is his.",
          greeting="*doesn't look up from the ledger* You walked into the wrong room, cara. Close the door. Now tell me why I shouldn't keep you here.",
          tags="mafia,possessive,morally grey"),
-    dict(name="Nikolai Volkov", age=37, gender="male", color="#19305C",
+    dict(name="Nikolai Volkov", voice="en-GB-ThomasNeural", voice_tone="deep", age=37, gender="male", color="#19305C",
          tagline="Bratva enforcer who was sent to collect your debt",
          appearance="Six foot four, close-cropped blond hair, pale grey eyes, tattooed hands, a worn leather coat.",
          persona="Nikolai is the quiet enforcer of a Russian crime family in Chicago. Patient, observant and "
@@ -180,7 +184,7 @@ SEED_CHARACTERS = [
                  "and is thrown by how badly he wants to protect the person he was sent to frighten.",
          greeting="*sets your unpaid ledger on the kitchen table and sits down without being asked* Relax. If I wanted to hurt you, you'd already know. We need to talk about your brother.",
          tags="bratva,stalker,protective"),
-    dict(name="Lucien Vale", age=312, gender="male", color="#413B61",
+    dict(name="Lucien Vale", voice="en-GB-RyanNeural", voice_tone="low", age=312, gender="male", color="#413B61",
          tagline="Vampire lord who has waited centuries for you",
          appearance="Tall and lean, porcelain skin with faint blue veins at the temples, sharp cheekbones, long black "
                     "hair tied back, dark eyes that catch the light red, a fitted black wool coat over an open shirt.",
@@ -189,28 +193,28 @@ SEED_CHARACTERS = [
                  "in front of him, and fights his hunger as much as he indulges it.",
          greeting="*steps out of the shadow of the bookshelves, cold air following him* Three hundred years, and you still arrive late. Come closer. I don't bite... unless asked.",
          tags="vampire,gothic,obsessive"),
-    dict(name="Rhys Callahan", age=36, gender="male", color="#2b4a85",
+    dict(name="Rhys Callahan", voice="en-IE-ConnorNeural", voice_tone="low", age=36, gender="male", color="#2b4a85",
          tagline="Ex-mercenary bodyguard who hates this job",
          appearance="Broad, scarred knuckles, buzzed hair, grey eyes, black tactical jacket, a gun he never hides.",
          persona="Rhys is a gruff former mercenary hired to protect someone he finds infuriating. Blunt, sarcastic and "
                  "fiercely protective, he hides a violent past and a soft spot he would rather die than admit.",
          greeting="*checks the window, then you* Rule one: you go nowhere without me. Rule two: stop looking at me like that.",
          tags="bodyguard,enemies to lovers,protective"),
-    dict(name="Adrian Kross", age=38, gender="male", color="#AE7DAC",
+    dict(name="Adrian Kross", voice="en-US-BrianNeural", voice_tone="natural", age=38, gender="male", color="#AE7DAC",
          tagline="Billionaire rival who bought your company to own you",
          appearance="Silver-touched dark hair, clean-shaven, ice-blue eyes, immaculate charcoal suits.",
          persona="Adrian is a ruthless tech billionaire who wins everything he wants. Arrogant, brilliant and "
                  "manipulative, he enjoys verbal duels and slowly reveals an obsession that started years ago.",
          greeting="*signs the last page and slides it across the desk* Congratulations. You work for me now. Sit down, we have a lot to discuss.",
          tags="billionaire,rivals,power play"),
-    dict(name="Mara Voss", age=29, gender="female", color="#F1916D",
+    dict(name="Mara Voss", voice="en-GB-SoniaNeural", voice_tone="low", age=29, gender="female", color="#F1916D",
          tagline="Assassin sent to kill you, who didn't",
          appearance="Black hair in a sharp braid, dark eyes, a knife scar on her collarbone, a fitted leather jacket.",
          persona="Mara is a cold, elite assassin who broke contract for the first time when she met her target. "
                  "Guarded, dry-humoured and deadly, she trusts no one and is furious that she cares.",
          greeting="*the blade rests against your throat, then lowers* You should be dead. Give me one reason I didn't finish the job.",
          tags="assassin,dangerous,slow-burn"),
-    dict(name="Sienna Hart", age=28, gender="female", color="#d9876a",
+    dict(name="Sienna Hart", voice="en-US-AvaNeural", voice_tone="natural", age=28, gender="female", color="#d9876a",
          tagline="Defense attorney who knows exactly what you did",
          appearance="Dark auburn hair in a low knot, green eyes, sharp tailored suit, red-soled heels, no jewelry.",
          persona="Sienna is a brilliant criminal defense attorney who represents dangerous men and wins. Cool, "
@@ -379,6 +383,10 @@ async def init_studio_db(db_path: str):
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(characters)")).fetchall()]
         if "portrait_prompt" not in cols:
             await db.execute("ALTER TABLE characters ADD COLUMN portrait_prompt TEXT NOT NULL DEFAULT ''")
+        if "voice" not in cols:
+            await db.execute("ALTER TABLE characters ADD COLUMN voice TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE characters ADD COLUMN voice_tone TEXT NOT NULL DEFAULT 'natural'")
+            await db.execute("ALTER TABLE characters ADD COLUMN voice_rate INTEGER NOT NULL DEFAULT 0")
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(conversations)")).fetchall()]
         if "summary" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
@@ -422,9 +430,11 @@ async def init_studio_db(db_path: str):
             for c in SEED_CHARACTERS:
                 await db.execute(
                     """INSERT INTO characters (name, age, gender, tagline, appearance, persona, greeting,
-                       tags, avatar, color, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       tags, avatar, color, voice, voice_tone, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (c["name"], c["age"], c["gender"], c["tagline"], c["appearance"], c["persona"],
-                     c["greeting"], c["tags"], c.get("avatar", ""), c["color"], now, now))
+                     c["greeting"], c["tags"], c.get("avatar", ""), c["color"], c.get("voice", ""),
+                     c.get("voice_tone", "natural"), now, now))
             await db.commit()
     if not await list_models(db_path):
         for m in SEED_MODELS:
@@ -656,7 +666,7 @@ def _stamp(ts: float | None) -> str:
 def _norm(text: str) -> str:
     """Normalize text for exact-quote checks: case, curly quotes, asterisks, spacing."""
     text = text.lower().translate(str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
-                                                 "\u2014": "-", "\u2013": "-", "*": " ", "_": " "}))
+                                                 "\u2014": "-", "\u2013": "-", "*": " ", "_": " ", "`": " "}))
     return re.sub(r"\s+", " ", text).strip(" .,!?\"'")
 
 
@@ -701,6 +711,14 @@ def _character_fields(body: dict) -> dict:
     f = {k: str(body.get(k) or "").strip()[:4000] for k in
          ("name", "gender", "tagline", "appearance", "persona", "greeting", "tags", "color", "avatar")}
     f["age"] = body.get("age")
+    f["voice"] = str(body.get("voice") or "")
+    if f["voice"] and f["voice"] not in voices.VOICE_IDS and not f["voice"].startswith("device:"):
+        f["voice"] = ""
+    f["voice_tone"] = body.get("voice_tone") if body.get("voice_tone") in voices.TONES else "natural"
+    try:
+        f["voice_rate"] = max(-50, min(50, int(body.get("voice_rate") or 0)))
+    except (TypeError, ValueError):
+        f["voice_rate"] = 0
     return f
 
 
@@ -748,15 +766,41 @@ async def save_character(request: Request, s: dict = Depends(_session)):
     cid = body.get("id")
     if cid:
         await _exec("""UPDATE characters SET name=?, age=?, gender=?, tagline=?, appearance=?, persona=?,
-                       greeting=?, tags=?, color=?, avatar=?, updated_at=? WHERE id=?""",
+                       greeting=?, tags=?, color=?, avatar=?, voice=?, voice_tone=?, voice_rate=?, updated_at=?
+                       WHERE id=?""",
                     (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
-                     f["persona"], greeting, f["tags"][:200], f["color"] or "#F1916D", f["avatar"], now, int(cid)))
+                     f["persona"], greeting, f["tags"][:200], f["color"] or "#F1916D", f["avatar"],
+                     f["voice"], f["voice_tone"], f["voice_rate"], now, int(cid)))
         return JSONResponse({"id": int(cid)})
     cid = await _exec("""INSERT INTO characters (name, age, gender, tagline, appearance, persona, greeting,
-                         tags, avatar, color, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         tags, avatar, color, voice, voice_tone, voice_rate, created_at, updated_at)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (f["name"][:60], int(f["age"]), f["gender"] or "female", f["tagline"][:160], f["appearance"],
-                       f["persona"], greeting, f["tags"][:200], f["avatar"], f["color"] or "#F1916D", now, now))
+                       f["persona"], greeting, f["tags"][:200], f["avatar"], f["color"] or "#F1916D",
+                       f["voice"], f["voice_tone"], f["voice_rate"], now, now))
     return JSONResponse({"id": cid})
+
+
+@router.get("/voices")
+async def list_voices(s: dict = Depends(_session)):
+    return JSONResponse({"enabled": voices.enabled(), "regions": voices.REGIONS, "voices": voices.VOICES,
+                         "tones": list(voices.TONES), "defaults": voices.DEFAULT_VOICE})
+
+
+@router.post("/tts")
+async def tts(request: Request, s: dict = Depends(_session)):
+    """Read text aloud in a voice: returns MP3. "mode" picks what to read: all, words_thoughts or words."""
+    body = await request.json()
+    mode = body.get("mode") if body.get("mode") in voices.READ_MODES else "all"
+    text = voices.speakable(str(body.get("text") or ""), mode)
+    if not text:
+        return _err(400, "Nothing to read in that message.")
+    try:
+        audio = await voices.synthesize(text, str(body.get("voice") or ""), str(body.get("tone") or "natural"),
+                                        body.get("rate") or 0)
+    except voices.VoiceError as e:
+        return _err(503, str(e))
+    return Response(audio, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.post("/characters/{cid}/portrait")
@@ -1268,8 +1312,10 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
 
     system = (
         f"You are {c['name']}, a {c['age']}-year-old {c['gender']} character in an interactive dark romance "
-        f"role-play with {s['username']}. Stay in character. Write only {c['name']}'s replies: speech plus "
-        "short *italic actions*, 1 to 3 paragraphs, and never speak or act for the user. " + LIFELIKE_RULES + " Dark themes, tension "
+        f"role-play with {s['username']}. Stay in character. Write only {c['name']}'s replies, 1 to 3 paragraphs, and never speak or act for the user. "
+        "Format every reply the same way: spoken words in \"double quotes\", actions and body language in "
+        "*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
+        "`She has no idea.` \"You should go.\" " + LIFELIKE_RULES + " Dark themes, tension "
         "and explicit adult content between consenting adult characters are allowed in this private story.\n\n"
         f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
     )
