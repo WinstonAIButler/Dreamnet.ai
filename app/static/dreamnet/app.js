@@ -522,6 +522,7 @@
     thought: '<path d="M7 15a4 4 0 0 1-.5-8A5 5 0 0 1 16 6a4 4 0 0 1 1 9z"/><circle cx="8" cy="19" r="1.2"/><circle cx="5" cy="21" r=".6"/>',
     down: '<path d="M7 10l5 5 5-5"/>',
     image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 8"/>',
+    alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
     wand: '<path d="M4 20L15 9M13 7l4 4"/><path d="M18 3v3M16.5 4.5h3M20 9v2M19 10h2M9 3v2M8 4h2"/>',
     mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>',
     send: '<path d="M4 12l16-8-6 16-3-7z"/>',
@@ -1228,6 +1229,8 @@
         '<div class="scene-rules"><h4>Time rules for this scene <span class="hint">add to the main table; same name replaces it</span></h4>' +
         '<div id="sceneRules"></div><button type="button" class="btn small" id="srAdd">+ Add rule</button> ' +
         '<button type="button" class="btn small" id="srSave">Save scene rules</button></div></form>' +
+        (state.me.ai_ready === false ? '<div class="rp-problem top">' + ic("alert") + "<div><b>The AI isn't connected.</b> Characters can't answer until this server has a Featherless API key. " +
+          "On Render: open the dreamnet service, go to <b>Environment</b>, set <b>FEATHERLESS_API_KEY</b> to your key from featherless.ai, then save.</div></div>" : "") +
         '<div class="messages" id="msgs"></div>' +
         '<form class="composer rp-composer" id="composer"><textarea id="input" rows="1" placeholder="Send a message" aria-label="Your message"></textarea>' +
         '<div class="rp-bar"><div class="rp-pop"><button type="button" class="rp-mode" id="modeBtn" title="How your message is sent">' +
@@ -1518,8 +1521,15 @@
         }).catch(function (e) {
           if (e.name === "AbortError") return;
           if (opts.cont) { target.typing = false; target.content = base.replace(/\s+$/, ""); } else list.pop();
-          render(); toast(e.message, true);
+          render(); showProblem(e.message);
         }).finally(function () { sendBtn.disabled = false; ctrl = null; });
+      }
+      // A failed reply stays on screen (not just a toast) so it's clear what to fix.
+      function showProblem(msg) {
+        var box = document.getElementById("msgs"), el = document.createElement("div");
+        el.className = "rp-problem";
+        el.innerHTML = ic("alert") + "<div><b>No reply.</b> " + esc(msg) + "</div>";
+        box.appendChild(el); box.scrollTop = box.scrollHeight;
       }
       function wrap(text) {
         if (mode === "say" && !/^["“]/.test(text)) return '"' + text + '"';

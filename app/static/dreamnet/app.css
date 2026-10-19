@@ -739,3 +739,8 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
   .rp-head .grow { display: none; }
   .rp-head .icon-btn { width: 34px; height: 34px; }
 }
+
+/* A reply that failed, or an AI that isn't set up: says what to fix. */
+.rp-problem { flex: none; display: flex; gap: 10px; align-items: flex-start; margin: 10px 16px; padding: 12px 14px; border-radius: 14px; border: 1px solid #F1916D; background: rgba(241,145,109,.12); color: #F3DADF; font-size: 14px; line-height: 1.45; }
+.rp-problem svg { flex: none; width: 18px; height: 18px; stroke: #F1916D; fill: none; stroke-width: 2; margin-top: 1px; }
+.rp-problem b { color: #F1916D; }
