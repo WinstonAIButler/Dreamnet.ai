@@ -57,6 +57,12 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   otherwise (for example on Render) by a free online image service that only
   ever sees the generic choice, like "a woman with curly hair". Set
   `OPTION_IMAGE_SERVICE=off` to show names only.
+- **Character portraits, made or uploaded.** On a character's page, "Make it
+  from the description" writes a photo prompt from the character and makes a
+  realistic portrait: on ComfyUI when it's set, otherwise with the same online
+  service (only that prompt is sent, never your chats; `PORTRAIT_SERVICE=off`
+  turns it off). "Upload a photo from your computer" takes a JPEG, PNG or WebP
+  up to 10 MB.
 - **Detailed character profiles.** Beyond the basics, each character has a
   profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
   piercings, style, scent, voice), personality (temperament, desires, fears,
