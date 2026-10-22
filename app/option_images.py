@@ -16,10 +16,14 @@ import app.portraits as portraits
 OPTION_DIR = portraits.PORTRAIT_DIR / "options"
 TILE = (640, 800)        # people and things, 4:5
 PLACE = (832, 560)       # places, about 3:2
+SWATCH = (640, 640)      # eye and skin close-ups, square
 
-_STYLE = ("Photorealistic photograph, shot on a full-frame camera, natural skin texture, real light, "
-          "cinematic low-key lighting with deep navy and plum tones and a warm coral rim light, shallow depth of "
-          "field. Not a drawing, not anime, not CGI, not an illustration, no text, no logo.")
+_STYLE = ("RAW photo, real person, editorial beauty photography, 85mm portrait lens at f/2, sharp focus on the "
+          "eyes, natural skin texture with pores and fine hairs, true-to-life colours, soft diffused studio light, "
+          "plain backdrop in dusty rose fading to deep plum. Not a drawing, not anime, not CGI, not 3D, not an "
+          "illustration, no text, no logo, no watermark.")
+_MACRO = ("RAW macro photograph, real human, 100mm macro lens, razor-sharp detail, true-to-life colours, soft "
+          "diffused light. Not a drawing, not CGI, not 3D, not an illustration, no text, no logo, no watermark.")
 _WHO = {"male": "a man", "female": "a woman", "non-binary": "an androgynous person"}
 
 # set: (template, size). {key} is the choice, {who} the character's gender.
@@ -29,6 +33,13 @@ TEMPLATES = {
              "practical makeup and real physical detail only, dark elegant clothes, fully clothed.", TILE),
     "heritage": ("Portrait of {who} in their late twenties of {key} heritage, dark elegant clothes, fully clothed.", TILE),
     "hair_style": ("Portrait of {who} in their late twenties with {key} hair, dark clothes, fully clothed.", TILE),
+    "hair": ("Close-up portrait of {who} in their late twenties with natural {key} hair, the hair colour clearly "
+             "visible and true to life in soft even light, dark clothes, fully clothed.", TILE),
+    "eyes": ("Macro photograph of one human eye with a {key} iris, filling the frame: the iris colour vivid, sharp "
+             "and true to life, fine iris texture, natural eyelashes and a catchlight (coloured contact lens if the "
+             "colour is unusual).", SWATCH),
+    "skin": ("Macro close-up photograph of human skin in a {key} skin tone, the tone true to life in soft neutral "
+             "light: the curve of a shoulder and collarbone, natural texture and pores, no makeup.", SWATCH),
     "build": ("Full-body fashion photograph of {who} in their late twenties with a {key} build, fitted dark "
               "clothes, fully clothed, standing in a dim studio.", TILE),
     "height": ("Full-body photograph of {who} in their late twenties who is {key}, standing in a doorway for scale, "
@@ -62,7 +73,7 @@ def prompt_for(kind: str, key: str, gender: str = "") -> tuple[str, tuple[int, i
     template, size = TEMPLATES[kind]
     who = _WHO.get(gender, "a person")
     text = template.format(key=key.lower(), who=who, key_who=_WHO.get(key, "a person"))
-    return f"{text} Every person shown is an adult. {_STYLE}", size
+    return f"{text} Every person shown is an adult. {_MACRO if size == SWATCH else _STYLE}", size
 
 
 def path_for(prompt: str):
@@ -81,7 +92,10 @@ async def get(client, kind: str, key: str, gender: str = "") -> bytes:
     async with _lock:
         if path.exists():  # made while this request waited
             return path.read_bytes()
-        seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16)
+        # One seed per set and gender, so every tile in a step shows the same model and only the
+        # chosen trait changes between them (places each get their own).
+        basis = prompt if kind == "place" else f"{kind}|{gender}"
+        seed = int(hashlib.sha256(basis.encode()).hexdigest()[:8], 16)
         if online:
             png = await _online(client, prompt, w, h, seed)
         else:
