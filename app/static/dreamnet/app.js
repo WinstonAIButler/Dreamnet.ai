@@ -808,7 +808,7 @@
     }
     // Colours (skin, hair, eyes) are photo tiles too, so "Blonde" shows real blonde hair.
     function swatches(sw) {
-      return '<h4 class="wiz-sub">' + sw.title + '</h4><div class="wiz-tiles">' + SWATCH[sw.key].map(function (x) {
+      return '<h4 class="wiz-sub">' + sw.title + '</h4><div class="wiz-tiles' + (sw.key === "hair" ? "" : " macro") + '">' + SWATCH[sw.key].map(function (x) {
         return '<button type="button" class="wiz-tile' + (picks[sw.key] === x[0] ? " on" : "") + '" data-k="' + sw.key + '" data-v="' + x[0] + '">' +
           photoSpan(sw.key, x[0], picks.gender) + '<span class="lbl"><i class="dot" style="--sw:' + x[1] + '"></i>' + x[0] + "</span></button>";
       }).join("") + "</div>";

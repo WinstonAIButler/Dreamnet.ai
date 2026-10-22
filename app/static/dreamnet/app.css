@@ -755,3 +755,22 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
 
 /* Colour tiles: a small true-colour dot next to the name, under the photo. */
 .wiz-tile .lbl .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--sw); border: 1px solid var(--line); margin-right: 7px; vertical-align: -1px; }
+
+/* Photo choice cards: big photo, name over the bottom of it, a check on the picked one. */
+.wiz-tiles:has(.ph) { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.wiz-tile:has(.ph) { position: relative; border-radius: 18px; border-width: 2px; }
+.wiz-tile:has(.ph) .ph { aspect-ratio: 3 / 4; }
+.wiz-tile:has(.ph) .lbl { position: absolute; left: 0; right: 0; bottom: 0; padding: 36px 12px 12px; text-align: center;
+  background: linear-gradient(to top, rgba(3,18,47,.92), rgba(3,18,47,0)); color: #F3DADF;
+  font-weight: 800; font-size: 17px; letter-spacing: .03em; text-transform: uppercase; text-shadow: 0 1px 6px rgba(3,18,47,.8); }
+.wiz-tile.on:has(.ph) { border-color: #F1916D; box-shadow: 0 0 0 2px #F1916D; }
+.wiz-tile.on:has(.ph) .lbl { color: #F1916D; }
+.wiz-tile.on:has(.ph)::after { content: "✓"; position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center; background: #F1916D; color: #03122F; font-weight: 800; font-size: 15px; }
+.wiz-tile:has(.ph):hover { transform: translateY(-2px); }
+@media (max-width: 560px) { .wiz-tiles:has(.ph) { grid-template-columns: 1fr 1fr; } .wiz-tile:has(.ph) .lbl { font-size: 14px; } }
+/* Eye and skin colours: square close-ups (a real eye, real skin), a little smaller. */
+.wiz-tiles.macro { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.wiz-tiles.macro .ph { aspect-ratio: 1 / 1; }
+.wiz-tiles.macro .lbl { font-size: 14px; }
+@media (max-width: 560px) { .wiz-tiles.macro { grid-template-columns: repeat(3, 1fr); } }
