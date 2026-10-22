@@ -525,6 +525,7 @@
     thought: '<path d="M7 15a4 4 0 0 1-.5-8A5 5 0 0 1 16 6a4 4 0 0 1 1 9z"/><circle cx="8" cy="19" r="1.2"/><circle cx="5" cy="21" r=".6"/>',
     down: '<path d="M7 10l5 5 5-5"/>',
     image: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 8"/>',
+    alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
     wand: '<path d="M4 20L15 9M13 7l4 4"/><path d="M18 3v3M16.5 4.5h3M20 9v2M19 10h2M9 3v2M8 4h2"/>',
     mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>',
     send: '<path d="M4 12l16-8-6 16-3-7z"/>',
@@ -934,7 +935,7 @@
       var c = r[0], sections = r[1], prof = c.profile || {};
       view.innerHTML =
         '<div class="create">' +
-        '<div class="preview"><div class="card" id="pv"></div></div>' +
+        '<div class="preview form"><div class="card" id="pv"></div>' + portraitSection(id, c) + "</div>" +
         '<form class="panel form" id="charForm">' +
         "<h2>" + (id ? "Edit " + esc(c.name) : "Create a character") + "</h2>" +
         '<div class="two"><label>Name<input name="name" required maxlength="60" value="' + esc(c.name) + '"></label>' +
@@ -955,7 +956,6 @@
         '<label><span class="lbl">Opening line ' + aiBtn("greeting") + ' <span class="hint">how they greet you in a new scene: &quot;words&quot;, *actions*, `thoughts`</span></span><textarea name="greeting" rows="3">' + esc(c.greeting) + "</textarea></label>" +
         '<div class="two"><label>Tags <span class="hint">comma separated</span><input name="tags" value="' + esc(c.tags) + '"></label>' +
         '<label>Portrait URL <span class="hint">optional, a photo-realistic image</span><input name="avatar" value="' + esc(c.avatar) + '"></label></div>' +
-        portraitSection(id, c) +
         voiceSection(c) +
         '<p class="form-error" id="charErr"></p>' +
         '<div class="row"><button class="btn primary">' + (id ? "Save changes" : "Create character") + "</button>" +
@@ -1104,17 +1104,17 @@
   function portraitSection(id, c) {
     var inner = "";
     if (state.me.portrait_gen) {
-      inner = '<p class="hint">Make a portrait from the description, or upload your own photo.' + (id ? "" : " Making one creates the character first, so fill in a name and personality.") + "</p>" +
-        '<textarea id="portraitPrompt" rows="3" placeholder="Leave empty and the AI writes a photo prompt from this character\'s description.">' + esc(c.portrait_prompt || "") + "</textarea>" +
-        '<div class="row"><button type="button" class="btn primary" id="genPortrait">' + ic("wand") + ' Make it from the description</button>' +
+      inner = '<p class="hint">Make a realistic portrait from the description, or upload your own photo.' + (id ? "" : " Making one saves the character first, so fill in a name and personality.") + "</p>" +
+        '<textarea id="portraitPrompt" rows="3" placeholder="Optional: describe the photo. Leave empty and the AI uses the description.">' + esc(c.portrait_prompt || "") + "</textarea>" +
+        '<div class="row"><button type="button" class="btn primary" id="genPortrait">' + ic("wand") + ' Make it with AI</button>' +
         '<span class="hint" id="portraitStatus"></span></div>';
     } else {
       inner = '<p class="hint">Upload a realistic photo of this character.</p>';
     }
     var upload = '<div class="row"><label class="btn" id="uploadPortraitBtn">' + ic("image") +
-      ' Upload a photo from your computer<input type="file" id="uploadPortrait" accept="image/jpeg,image/png,image/webp" hidden></label>' +
+      ' Upload a photo<input type="file" id="uploadPortrait" accept="image/jpeg,image/png,image/webp" hidden></label>' +
       '<span class="hint" id="uploadStatus">JPEG, PNG or WebP, up to 10 MB. Adults only.</span></div>';
-    return '<fieldset class="cast portrait"><legend>Portrait <span class="hint">a realistic photo</span></legend>' + inner + upload + "</fieldset>";
+    return '<fieldset class="cast portrait"><legend>Photo</legend>' + inner + upload + "</fieldset>";
   }
 
   // ---------- roleplay chat ----------
@@ -1251,6 +1251,8 @@
         '<div class="scene-rules"><h4>Time rules for this scene <span class="hint">add to the main table; same name replaces it</span></h4>' +
         '<div id="sceneRules"></div><button type="button" class="btn small" id="srAdd">+ Add rule</button> ' +
         '<button type="button" class="btn small" id="srSave">Save scene rules</button></div></form>' +
+        (state.me.ai_ready === false ? '<div class="rp-problem top">' + ic("alert") + "<div><b>The AI isn't connected.</b> Characters can't answer until this server has a Featherless API key. " +
+          "On Render: open the dreamnet service, go to <b>Environment</b>, set <b>FEATHERLESS_API_KEY</b> to your key from featherless.ai, then save.</div></div>" : "") +
         '<div class="messages" id="msgs"></div>' +
         '<form class="composer rp-composer" id="composer"><textarea id="input" rows="1" placeholder="Send a message" aria-label="Your message"></textarea>' +
         '<div class="rp-bar"><div class="rp-pop"><button type="button" class="rp-mode" id="modeBtn" title="How your message is sent">' +
@@ -1541,8 +1543,15 @@
         }).catch(function (e) {
           if (e.name === "AbortError") return;
           if (opts.cont) { target.typing = false; target.content = base.replace(/\s+$/, ""); } else list.pop();
-          render(); toast(e.message, true);
+          render(); showProblem(e.message);
         }).finally(function () { sendBtn.disabled = false; ctrl = null; });
+      }
+      // A failed reply stays on screen (not just a toast) so it's clear what to fix.
+      function showProblem(msg) {
+        var box = document.getElementById("msgs"), el = document.createElement("div");
+        el.className = "rp-problem";
+        el.innerHTML = ic("alert") + "<div><b>No reply.</b> " + esc(msg) + "</div>";
+        box.appendChild(el); box.scrollTop = box.scrollHeight;
       }
       function wrap(text) {
         if (mode === "say" && !/^["“]/.test(text)) return '"' + text + '"';

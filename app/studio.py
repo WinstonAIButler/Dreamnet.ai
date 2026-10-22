@@ -7,6 +7,7 @@ handler, so it shares the proxy's queue, retries and usage logging.
 """
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -31,6 +32,7 @@ from app.safety import CRISIS_RESPONSE, SAFETY_RULES, check_character, is_crisis
 
 router = APIRouter(prefix="/app/api")
 
+logger = logging.getLogger("featherless-proxy.studio")
 DEFAULT_MODEL = os.getenv("DREAMNET_DEFAULT_MODEL", "Sao10K/L3-8B-Stheno-v3.2")
 WEB_KEY_NAME = "dreamnet-web"
 
@@ -523,9 +525,35 @@ async def _web_key(user_id: int) -> dict:
     return await get_api_key_by_key(DB_PATH, key)
 
 
+NO_AI_KEY = ("The AI isn't connected: this server has no Featherless API key. On Render, open the dreamnet "
+             "service, go to Environment, set FEATHERLESS_API_KEY to your key from featherless.ai, and save.")
+
+
+def _ai_problem(status: int, detail: str, model: str) -> str:
+    """Turn an upstream failure into a sentence that says what to fix."""
+    low = detail.lower()
+    if not api_routes.FEATHERLESS_API_KEY:
+        return NO_AI_KEY
+    if status in (401, 403) or "api key" in low or "unauthorized" in low:
+        return ("Featherless turned down the API key. Check FEATHERLESS_API_KEY on Render (Environment): it must be "
+                "the full key from featherless.ai, and the subscription must be active.")
+    if status == 404 or "not found" in low or "does not exist" in low or "not available" in low:
+        return (f"Featherless can't run the model {model}. Pick another model in the chat settings, or check that "
+                "your Featherless plan includes it.")
+    if status == 429 or "concurren" in low or "rate" in low:
+        return "The AI is busy right now (too many requests at once on your Featherless plan). Try again in a moment."
+    if status == 504 or "timeout" in low:
+        return "The AI took too long to answer. Try again."
+    if status in (502, 503) or "connection" in low:
+        return "Couldn't reach the AI service (Featherless). Try again in a minute."
+    return f"The AI returned an error ({status}): {detail[:300]}"
+
+
 async def _stream(request: Request, session: dict, model: str, messages: list[dict],
                   temperature: float, max_tokens: int, on_done=None):
     """Stream a completion through the proxy and call ``on_done(text)`` at the end."""
+    if not api_routes.FEATHERLESS_API_KEY:
+        return _err(503, NO_AI_KEY)
     key = await _web_key(session["user_id"])
     is_admin = api_routes._is_admin_key(key)
     if not is_admin and (key.get("user_credits") or 0) <= 0:
@@ -552,6 +580,11 @@ async def _stream(request: Request, session: dict, model: str, messages: list[di
                         data = json.loads(line[6:])
                     except json.JSONDecodeError:
                         continue
+                    if isinstance(data.get("error"), dict):  # upstream failure: say what to fix
+                        err = data["error"]
+                        logger.warning(f"Chat failed model={model}: {err}")
+                        msg = _ai_problem(int(err.get("code") or 0), str(err.get("message") or ""), model)
+                        raw = raw.replace(line.encode(), ("data: " + json.dumps({"error": {"message": msg}})).encode())
                     for ch in data.get("choices", []):
                         text += (ch.get("delta") or {}).get("content") or ""
             yield raw
@@ -776,6 +809,7 @@ async def me(request: Request):
         return JSONResponse({"authenticated": False})
     return JSONResponse({"authenticated": True, "username": s["username"], "is_admin": bool(s["is_admin"]),
                          "default_model": DEFAULT_MODEL, "portraits": portraits.enabled(),
+                         "ai_ready": bool(api_routes.FEATHERLESS_API_KEY),
                          "portrait_gen": portraits.can_make_portraits()})
 
 
@@ -1156,6 +1190,8 @@ async def _scene_prompt(s: dict, m: dict) -> str:
 async def _complete(user_id: int, messages: list[dict], temperature: float, max_tokens: int,
                     model: str | None = None) -> str:
     """One non-streaming completion through the proxy's queue; returns the text."""
+    if not api_routes.FEATHERLESS_API_KEY:  # fail now, not after minutes of retries
+        raise HTTPException(status_code=503, detail=NO_AI_KEY)
     model = model or DEFAULT_MODEL
     key = await _web_key(user_id)
     cfg = api_routes._resolve_model(await get_model_by_id(DB_PATH, model))
