@@ -29,6 +29,12 @@ TEMPLATES = {
              "practical makeup and real physical detail only, dark elegant clothes, fully clothed.", TILE),
     "heritage": ("Portrait of {who} in their late twenties of {key} heritage, dark elegant clothes, fully clothed.", TILE),
     "hair_style": ("Portrait of {who} in their late twenties with {key} hair, dark clothes, fully clothed.", TILE),
+    "hair": ("Close-up portrait of {who} in their late twenties with natural {key} hair, the hair colour clearly "
+             "visible and true to life in soft even light, dark clothes, fully clothed.", TILE),
+    "eyes": ("Extreme close-up photograph of the face of {who} in their late twenties showing {key} eyes, the iris "
+             "colour sharp, vivid and true to life (coloured contact lenses if the colour is unusual).", TILE),
+    "skin": ("Close-up portrait of {who} in their late twenties with {key} skin, the skin tone true to life in soft "
+             "neutral light, bare shoulders and neck, natural texture, no makeup.", TILE),
     "build": ("Full-body fashion photograph of {who} in their late twenties with a {key} build, fitted dark "
               "clothes, fully clothed, standing in a dim studio.", TILE),
     "height": ("Full-body photograph of {who} in their late twenties who is {key}, standing in a doorway for scale, "
