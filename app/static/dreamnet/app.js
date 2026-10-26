@@ -803,12 +803,14 @@
       return '<div class="wiz-tiles">' + st.items.map(function (it) {
         var on = chosen(st.key).indexOf(it.v) >= 0;
         return '<button type="button" class="wiz-tile' + (on ? " on" : "") + '" data-k="' + st.key + '" data-v="' + esc(it.v) + '">' +
-          photoSpan(st.key, it.v, st.key === "gender" ? "" : picks.gender) + '<span class="lbl">' + esc(it.v.charAt(0).toUpperCase() + it.v.slice(1)) + "</span></button>";
+          photoSpan(st.key, st.key === "hair_style" && picks.hair ? picks.hair + ", " + it.v : it.v, st.key === "gender" ? "" : picks.gender) + '<span class="lbl">' + esc(it.v.charAt(0).toUpperCase() + it.v.slice(1)) + "</span></button>";
       }).join("") + "</div>";
     }
+    // Colours (skin, hair, eyes) are photo tiles too, so "Blonde" shows real blonde hair.
     function swatches(sw) {
-      return '<h4 class="wiz-sub">' + sw.title + '</h4><div class="wiz-swatches">' + SWATCH[sw.key].map(function (x) {
-        return '<button type="button" class="wiz-swatch' + (picks[sw.key] === x[0] ? " on" : "") + '" data-k="' + sw.key + '" data-v="' + x[0] + '" title="' + x[0] + '" style="--sw:' + x[1] + '"><span></span><small>' + x[0] + "</small></button>";
+      return '<h4 class="wiz-sub">' + sw.title + '</h4><div class="wiz-tiles' + (sw.key === "hair" ? "" : " macro") + '">' + SWATCH[sw.key].map(function (x) {
+        return '<button type="button" class="wiz-tile' + (picks[sw.key] === x[0] ? " on" : "") + '" data-k="' + sw.key + '" data-v="' + x[0] + '">' +
+          photoSpan(sw.key, x[0], picks.gender) + '<span class="lbl"><i class="dot" style="--sw:' + x[1] + '"></i>' + x[0] + "</span></button>";
       }).join("") + "</div>";
     }
     function ready(st) {
