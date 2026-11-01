@@ -32,6 +32,7 @@ from app.api_routes import router as api_router, init_routes
 from app.admin_routes import router as admin_router, init_admin
 from app.user_routes import router as user_router, init_user
 from app.studio import router as studio_router, init_studio_db
+from app.jarvis import router as jarvis_router
 
 # Config
 FEATHERLESS_API_BASE = os.getenv("FEATHERLESS_API_BASE", "https://api.featherless.ai/v1")
@@ -123,6 +124,7 @@ app.include_router(api_router)
 app.include_router(admin_router)
 app.include_router(user_router)
 app.include_router(studio_router)
+app.include_router(jarvis_router)  # /jarvis and /api/jarvis: the read-only operations page
 
 
 # --- Auth routes ---
