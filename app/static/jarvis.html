@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Jarvis · Dreamnet.ai</title>
+<style>
+  :root {
+    --accent: #c2416b;
+    --bg: #0d1117; --panel: #161b22; --panel-2: #1c232c; --line: #2a333e;
+    --text: #e6edf3; --muted: #8b98a5; --good: #3fb950; --warn: #d29922; --bad: #f85149;
+    --radius: 12px;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; }
+  a { color: var(--accent); }
+  header { display: flex; align-items: center; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+  .orb { width: 34px; height: 34px; border-radius: 50%; flex: none;
+         background: radial-gradient(circle at 35% 35%, #fff 0 8%, var(--accent) 30%, transparent 72%);
+         box-shadow: 0 0 18px var(--accent); }
+  .orb.busy { animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 50% { transform: scale(.82); opacity: .6; } }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 60px; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .actions { display: flex; gap: 8px; }
+  @media (max-width: 560px) {
+    header { flex-wrap: wrap; }
+    header .spacer { display: none; }
+    .actions { width: 100%; }
+    .actions button { flex: 1; }
+    .tile .value { font-size: 19px; }
+  }
+  .tile { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 22px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .tile .note { color: var(--muted); font-size: 12px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  ul.list li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  ul.list li:first-child { border-top: 0; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
+  .pill.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+  .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .pill.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+  button { font: inherit; cursor: pointer; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); padding: 9px 14px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0d1117; font-weight: 650; }
+  button:disabled { opacity: .55; cursor: wait; }
+  input, textarea { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; width: 100%; }
+  input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .md h2 { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 16px 0 6px; }
+  .md h2:first-child { margin-top: 0; }
+  .md h3 { font-size: 14px; margin: 12px 0 4px; }
+  .md p { margin: 6px 0; } .md ul, .md ol { margin: 6px 0; padding-left: 20px; } .md li { margin: 3px 0; }
+  .md code { background: var(--panel-2); padding: 1px 5px; border-radius: 5px; }
+  .chat { display: grid; gap: 10px; max-height: 460px; overflow-y: auto; margin-bottom: 12px; }
+  .msg { padding: 10px 12px; border-radius: 10px; max-width: 92%; }
+  .msg.user { background: color-mix(in srgb, var(--accent) 18%, var(--panel-2)); justify-self: end; }
+  .msg.assistant { background: var(--panel-2); border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; }
+  .error { color: var(--bad); }
+  .gate { max-width: 420px; margin: 12vh auto; text-align: center; }
+  .gate .orb { width: 64px; height: 64px; margin: 0 auto 18px; }
+  .company { display: grid; gap: 10px; }
+  .company h3 { margin: 0; font-size: 16px; }
+  .grid-companies { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .kv { display: flex; justify-content: space-between; font-size: 14px; padding: 3px 0; }
+  .kv span:last-child { font-variant-numeric: tabular-nums; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="gate" class="gate" hidden>
+  <div class="orb"></div>
+  <h1>Jarvis · Dreamnet.ai</h1>
+  <p class="muted">Enter the access code to continue.</p>
+  <form id="gate-form" class="row">
+    <input id="gate-code" type="password" autocomplete="current-password" aria-label="Access code" placeholder="Access code" required>
+    <button class="primary" type="submit">Open</button>
+  </form>
+  <p id="gate-error" class="error" role="alert"></p>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <div id="orb" class="orb" aria-hidden="true"></div>
+    <div>
+      <h1>Jarvis · Dreamnet.ai</h1>
+      <p id="updated">Reading Stripe and GitHub…</p>
+    </div>
+    <div class="spacer"></div>
+    <div class="actions">
+      <button id="refresh" type="button">Refresh</button>
+      <button id="brief" class="primary" type="button">Brief me</button>
+    </div>
+  </header>
+  <main>
+    <section id="setup" class="panel" hidden>
+      <h2>Finish setup</h2>
+      <ul id="setup-list" class="list"></ul>
+    </section>
+
+    <section class="panel" aria-labelledby="money-h">
+      <h2 id="money-h">Revenue</h2>
+      <div id="tiles" class="tiles"></div>
+    </section>
+
+    <section id="companies" class="panel" hidden aria-labelledby="companies-h">
+      <h2 id="companies-h">Companies</h2>
+      <div id="company-grid" class="grid-companies"></div>
+    </section>
+
+    <div id="single" class="cols">
+      <section class="panel" aria-labelledby="dev-h">
+        <h2 id="dev-h">Dev status</h2>
+        <div id="dev"></div>
+      </section>
+      <section class="panel" aria-labelledby="inv-h">
+        <h2 id="inv-h">Open invoices</h2>
+        <div id="invoices"></div>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="brief-h">
+      <h2 id="brief-h">Briefing</h2>
+      <div id="briefing" class="md"><p class="muted">Press <strong>Brief me</strong> for today's priorities, revenue, dev status and sales &amp; marketing moves.</p></div>
+    </section>
+
+    <section class="panel" aria-labelledby="ask-h">
+      <h2 id="ask-h">Ask Jarvis</h2>
+      <div id="chat" class="chat" aria-live="polite"></div>
+      <form id="ask-form" class="row">
+        <input id="ask-input" autocomplete="off" aria-label="Question for Jarvis" placeholder="e.g. Which invoices should I chase first?">
+        <button class="primary" type="submit">Ask</button>
+      </form>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  const API = "/api/jarvis";
+  const KEY = "jarvis-code:" + location.pathname;
+  const $ = (id) => document.getElementById(id);
+  let code = "";
+  let snapshot = null;
+  const history = [];
+
+  try { code = sessionStorage.getItem(KEY) || ""; } catch {}
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function money(map) {
+    const entries = Object.entries(map || {});
+    if (!entries.length) return "$0";
+    return entries.map(([cur, v]) => {
+      try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur, minimumFractionDigits: Number.isInteger(v) || v >= 1000 ? 0 : 2, maximumFractionDigits: v >= 1000 ? 0 : 2 }).format(v); }
+      catch { return v.toFixed(2) + " " + cur; }
+    }).join(" + ");
+  }
+  const ago = (iso) => {
+    if (!iso) return "";
+    const s = (Date.now() - new Date(iso)) / 1000;
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + "m ago";
+    if (s < 86400) return Math.round(s / 3600) + "h ago";
+    return Math.round(s / 86400) + "d ago";
+  };
+
+  // Small, safe Markdown: escape first, then headings, lists, bold, italics, code, links.
+  function md(text) {
+    const lines = esc(text).split("\n");
+    let html = "", list = null;
+    const inline = (s) => s
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    const close = () => { if (list) { html += "</" + list + ">"; list = null; } };
+    for (const line of lines) {
+      let m;
+      if ((m = line.match(/^(#{1,3})\s+(.*)/))) { close(); const lvl = m[1].length === 1 ? 2 : m[1].length; html += `<h${lvl}>${inline(m[2])}</h${lvl}>`; }
+      else if ((m = line.match(/^\s*[-*]\s+(.*)/))) { if (list !== "ul") { close(); html += "<ul>"; list = "ul"; } html += `<li>${inline(m[1])}</li>`; }
+      else if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) { if (list !== "ol") { close(); html += "<ol>"; list = "ol"; } html += `<li>${inline(m[1])}</li>`; }
+      else if (line.trim()) { close(); html += `<p>${inline(line)}</p>`; }
+      else close();
+    }
+    close();
+    return html;
+  }
+
+  async function call(body) {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-jarvis-code": code },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({ error: "Jarvis returned an unreadable answer." }));
+    if (res.status === 401) { lock("That code didn't work."); throw new Error("locked"); }
+    if (!res.ok) throw new Error(data.error || "Jarvis is unavailable (" + res.status + ").");
+    return data;
+  }
+
+  function busy(on) {
+    $("orb").classList.toggle("busy", on);
+    for (const b of document.querySelectorAll("button")) b.disabled = on;
+  }
+
+  function lock(msg) {
+    try { sessionStorage.removeItem(KEY); } catch {}
+    code = "";
+    $("app").hidden = true;
+    $("gate").hidden = false;
+    $("gate-error").textContent = msg || "";
+    $("gate-code").focus();
+  }
+
+  function tile(label, value, note) {
+    return `<div class="tile"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>${note ? `<div class="note">${esc(note)}</div>` : ""}</div>`;
+  }
+
+  function stripeNote(s) {
+    if (!s.ok) return `<span class="pill warn">Stripe not connected</span> <span class="muted">${esc(s.error)}</span>`;
+    return s.mode === "test" ? '<span class="pill warn">test mode</span>' : '<span class="pill good">live</span>';
+  }
+
+  function deployPill(d) {
+    const cls = d.state === "success" ? "good" : (d.state === "failure" || d.state === "error") ? "bad" : "warn";
+    return `<span class="pill ${cls}">${esc(d.environment)}: ${esc(d.state)}</span>`;
+  }
+
+  function devHtml(g) {
+    if (!g.ok) return `<p class="muted"><span class="pill warn">GitHub not connected</span> ${esc(g.error)}</p>`;
+    const deploys = g.deployments.length ? g.deployments.map((d) => `${deployPill(d)} <span class="muted">${esc(ago(d.at))}</span>`).join(" ") : '<span class="muted">No deployments reported</span>';
+    const prs = g.openPullRequests.length
+      ? g.openPullRequests.map((p) => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.number} ${esc(p.title)}</a>${p.draft ? '<span class="pill">draft</span>' : ""} <span class="muted">· ${esc(ago(p.openedAt))}</span></li>`).join("")
+      : '<li class="muted">No open pull requests</li>';
+    const commits = g.recentCommits.slice(0, 3).map((c) => `<li><code>${esc(c.sha)}</code> ${esc(c.message)} <span class="muted">· ${esc(ago(c.at))}</span></li>`).join("");
+    return `<p>${deploys}</p><h3 class="muted" style="font-size:12px;margin:12px 0 4px">Open pull requests</h3><ul class="list">${prs}</ul><h3 class="muted" style="font-size:12px;margin:12px 0 4px">Latest commits</h3><ul class="list">${commits}</ul>`;
+  }
+
+  function invoicesHtml(s) {
+    if (!s.ok) return `<p class="muted">${stripeNote(s)}</p>`;
+    const inv = s.openInvoices;
+    if (!inv.count) return '<p class="muted">No open invoices.</p>';
+    return `<p>${inv.count} open · ${money(inv.due)} due${inv.overdue ? ` · <span class="pill bad">${inv.overdue} overdue</span>` : ""}</p><ul class="list">` +
+      inv.items.map((i) => `<li>${esc(i.customer)} · ${money({ [i.currency]: i.amount })}${i.dueDate ? ` <span class="muted">· due ${esc(i.dueDate)}</span>` : ""}${i.overdue ? '<span class="pill bad">overdue</span>' : ""}</li>`).join("") + "</ul>";
+  }
+
+  function renderCompany(st) {
+    $("companies").hidden = true;
+    $("single").hidden = false;
+    const s = st.stripe;
+    $("tiles").innerHTML = s.ok
+      ? tile("Available balance", money(s.balanceAvailable), "Pending " + money(s.balancePending)) +
+        tile("Revenue, last 30 days", money(s.revenue30d), `${s.charges30d} payments${s.revenueComplete ? "" : " (first 500)"}`) +
+        tile("Monthly recurring", money(s.mrr), `${s.activeSubscriptions} active subscriptions`) +
+        tile("Open invoices", String(s.openInvoices.count), s.openInvoices.overdue ? `${s.openInvoices.overdue} overdue` : "none overdue")
+      : `<p>${stripeNote(s)}</p>`;
+    if (s.ok && s.mode === "test") $("tiles").insertAdjacentHTML("afterbegin", '<p style="grid-column:1/-1;margin:0"><span class="pill warn">Stripe test mode: these are test figures</span></p>');
+    $("dev").innerHTML = devHtml(st.github);
+    $("invoices").innerHTML = invoicesHtml(s);
+  }
+
+  function renderMaster(st) {
+    $("single").hidden = true;
+    $("companies").hidden = false;
+    $("money-h").textContent = "At a glance";
+    const t = st.totals;
+    $("tiles").innerHTML =
+      tile("Cash available, all companies", money(t.balanceAvailable), `${t.stripeConnected} of ${st.companies.length} Stripe accounts connected`) +
+      tile("Revenue, last 30 days", money(t.revenue30d)) +
+      tile("Monthly recurring", money(t.mrr)) +
+      tile("Open pull requests", String(t.openPullRequests), `${t.githubConnected} of ${st.companies.length} repos connected`) +
+      tile("Overdue invoices", String(t.overdueInvoices));
+    $("company-grid").innerHTML = st.companies.map((c) => {
+      const s = c.stripe, g = c.github;
+      const money30 = s.ok ? money(s.revenue30d) : "—";
+      const latest = g.ok && g.deployments[0] ? deployPill(g.deployments[0]) : "";
+      return `<div class="tile company"><h3>${esc(c.name)} ${s.ok && s.mode === "test" ? '<span class="pill warn">test</span>' : ""}</h3>
+        <div class="kv"><span class="muted">Revenue, 30 days</span><span>${esc(money30)}</span></div>
+        <div class="kv"><span class="muted">Monthly recurring</span><span>${s.ok ? esc(money(s.mrr)) : "—"}</span></div>
+        <div class="kv"><span class="muted">Open invoices</span><span>${s.ok ? s.openInvoices.count + (s.openInvoices.overdue ? ` (${s.openInvoices.overdue} overdue)` : "") : "—"}</span></div>
+        <div class="kv"><span class="muted">Open pull requests</span><span>${g.ok ? g.openPullRequests.length : "—"}</span></div>
+        <div>${latest}${s.ok ? "" : ' <span class="pill warn">Stripe not connected</span>'}${g.ok ? "" : ' <span class="pill warn">GitHub not connected</span>'}</div>
+      </div>`;
+    }).join("");
+  }
+
+  function render(st) {
+    snapshot = st;
+    $("updated").textContent = "Updated " + new Date(st.generatedAt).toLocaleTimeString();
+    if (st.mode === "master") renderMaster(st); else renderCompany(st);
+  }
+
+  async function refresh() {
+    busy(true);
+    try { render((await call({ action: "status" })).status); }
+    catch (e) { if (e.message !== "locked") $("updated").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+    finally { busy(false); }
+  }
+
+  async function brief() {
+    busy(true);
+    $("briefing").innerHTML = '<p class="muted">Jarvis is reading the numbers…</p>';
+    try {
+      const data = await call({ action: "brief" });
+      render(data.status);
+      $("briefing").innerHTML = md(data.briefing);
+    } catch (e) {
+      if (e.message !== "locked") $("briefing").innerHTML = `<p class="error">${esc(e.message)}</p>`;
+    } finally { busy(false); }
+  }
+
+  function addMsg(role, text) {
+    const div = document.createElement("div");
+    div.className = "msg " + role + (role === "assistant" ? " md" : "");
+    div.innerHTML = role === "assistant" ? md(text) : esc(text);
+    $("chat").appendChild(div);
+    $("chat").scrollTop = $("chat").scrollHeight;
+  }
+
+  async function ask(question) {
+    history.push({ role: "user", content: question });
+    addMsg("user", question);
+    busy(true);
+    try {
+      const data = await call({ action: "ask", messages: history });
+      render(data.status);
+      history.push({ role: "assistant", content: data.reply });
+      addMsg("assistant", data.reply);
+    } catch (e) {
+      history.pop();
+      if (e.message !== "locked") addMsg("assistant", "**Couldn't answer:** " + e.message);
+    } finally { busy(false); }
+  }
+
+  async function setup() {
+    try {
+      const res = await fetch(API);
+      const cfg = await res.json();
+      const items = [];
+      if (!cfg.accessCodeSet) items.push("Set <code>JARVIS_ACCESS_CODE</code> in the hosting environment. Jarvis stays locked until it's set.");
+      if (!cfg.claude) items.push("Set <code>ANTHROPIC_API_KEY</code> so Jarvis can write briefings and answer questions.");
+      if (!cfg.githubToken) items.push("Set <code>GITHUB_TOKEN</code> (a fine-grained, read-only token) so Jarvis can read private repos.");
+      for (const c of cfg.companies || []) {
+        if (!c.stripe) items.push(cfg.mode === "master"
+          ? `Add a read-only Stripe key for ${esc(c.name)} as <code>${esc(c.stripeVariable)}</code>.`
+          : "Add a restricted, read-only Stripe key as <code>JARVIS_STRIPE_KEY</code> (or reuse <code>STRIPE_SECRET_KEY</code>).");
+      }
+      $("setup").hidden = !items.length;
+      $("setup-list").innerHTML = items.map((i) => `<li>${i}</li>`).join("");
+    } catch {}
+  }
+
+  function open() {
+    $("gate").hidden = true;
+    $("app").hidden = false;
+    setup();
+    refresh();
+  }
+
+  $("gate-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    code = $("gate-code").value.trim();
+    if (!code) return;
+    try { sessionStorage.setItem(KEY, code); } catch {}
+    $("gate-error").textContent = "";
+    open();
+  });
+  $("refresh").addEventListener("click", refresh);
+  $("brief").addEventListener("click", brief);
+  $("ask-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = $("ask-input").value.trim();
+    if (!q) return;
+    $("ask-input").value = "";
+    ask(q);
+  });
+
+  if (code) open(); else lock("");
+})();
+</script>
+</body>
+</html>

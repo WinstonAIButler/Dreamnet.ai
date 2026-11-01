@@ -263,3 +263,15 @@ The studio calls the proxy's own streaming handler in-process, so every request
 goes through the same connection-slot queue and retry logic as the
 OpenAI-compatible `/v1/chat/completions` endpoint, which still works for other
 tools.
+
+## Jarvis
+
+`/jarvis` is Dreamnet.ai's operations chief of staff, the same page every Joslin Enterprises company has: live Stripe revenue if Dreamnet takes payments, dev status from GitHub (open pull requests, latest deploys, recent commits), and a Claude-written briefing with today's priorities and marketing moves. You can also ask it questions. It only reads: it can't move money, change code or touch your novels, characters or chats, and it never sees them.
+
+`app/jarvis.py` is a Python port of the shared Jarvis engine (`jarvis-core.js` in the other repos) and `app/static/jarvis.html` is the page. Set these on Render (Dashboard → the service → Environment) or in `.env`:
+
+- `JARVIS_ACCESS_CODE` (required): the passphrase the page asks for. Jarvis stays locked until it's set.
+- `ANTHROPIC_API_KEY`: Claude, for briefings and questions. Jarvis is the only part of Dreamnet that uses it.
+- `JARVIS_STRIPE_KEY` (optional): a restricted Stripe key with Read on Balance, Charges, Subscriptions and Invoices.
+- `GITHUB_TOKEN`: a fine-grained token with read-only Contents, Pull requests and Deployments on this repo.
+- `JARVIS_MODEL` (optional): default `claude-sonnet-5-5`.
