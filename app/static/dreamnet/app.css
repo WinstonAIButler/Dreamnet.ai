@@ -854,3 +854,6 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
 .gimg figcaption { flex-direction: column; align-items: stretch; }
 .gimg figcaption b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gimg-acts { margin-left: 0; justify-content: flex-start; gap: 4px; }
+.imgc-out-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.remix .check-line { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.remix select, .remix input[type=file] { width: 100%; }
