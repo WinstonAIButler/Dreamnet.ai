@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
+import app.image_studio as image_studio
 import app.option_images as option_images
 import app.places as places
 import app.portraits as portraits
@@ -151,6 +152,17 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_memories_char ON memories(character_id, id);
+
+-- Pictures made on the "Create image" page, kept as each character's gallery.
+CREATE TABLE IF NOT EXISTS images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    prompt TEXT NOT NULL DEFAULT '',
+    shape TEXT NOT NULL DEFAULT 'portrait',
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_images_char ON images(character_id, id);
 
 -- Key/value settings for the studio (time rules).
 CREATE TABLE IF NOT EXISTS studio_settings (
@@ -1048,6 +1060,96 @@ async def upload_portrait(request: Request, s: dict = Depends(_session)):
     return JSONResponse({"avatar": portraits.save(s["user_id"], data, "upload", ext)})
 
 
+# --- image creator and gallery ---
+
+@router.get("/image-options")
+async def image_options(s: dict = Depends(_session)):
+    return JSONResponse({**image_studio.options(), "enabled": portraits.can_make_portraits()})
+
+
+def _image_out(r: dict) -> dict:
+    return {"id": r["id"], "character_id": r["character_id"], "url": r["url"], "prompt": r["prompt"],
+            "shape": r["shape"], "created_at": r["created_at"]}
+
+
+@router.get("/images")
+async def list_images(character_id: int = 0, s: dict = Depends(_session)):
+    """The gallery: every picture made, newest first, or one character's when character_id is given."""
+    if character_id:
+        rows = await _rows("SELECT * FROM images WHERE character_id = ? ORDER BY id DESC", (character_id,))
+    else:
+        rows = await _rows("SELECT * FROM images ORDER BY id DESC LIMIT 500")
+    return JSONResponse([_image_out(r) for r in rows])
+
+
+@router.post("/images")
+async def create_images(request: Request, s: dict = Depends(_session)):
+    """Make 1 to 4 pictures of one character from the image creator's choices and keep them in the gallery."""
+    body = await request.json()
+    c = await _row("SELECT * FROM characters WHERE id = ?", (int(body.get("character_id") or 0),))
+    if not c:
+        return _err(404, "Pick a character first.")
+    if not portraits.can_make_portraits():
+        return _err(503, "Picture making is off on this server (PORTRAIT_SERVICE=off and no ComfyUI).")
+    shape = body.get("shape") if body.get("shape") in image_studio.SHAPES else "portrait"
+    count = max(1, min(image_studio.MAX_COUNT, int(body.get("count") or 1)))
+    details = str(body.get("details") or "")[:600]
+    avoid = str(body.get("avoid") or "")[:300]
+    if mentions_minor(details, strict=True):
+        return _err(400, "Pictures must show adults only.")
+    prompt = image_studio.build_prompt(c, profiles.looks(profiles.clean(c.get("profile"))),
+                                       str(body.get("scene") or ""), str(body.get("outfit") or ""),
+                                       str(body.get("pose") or ""), details, avoid)
+    _, w, h = image_studio.SHAPES[shape]
+    gate = asyncio.Semaphore(2)
+
+    async def one():
+        async with gate:
+            return await portraits.make_portrait(api_routes.http_client, prompt, w, h)
+
+    results = await asyncio.gather(*(one() for _ in range(count)), return_exceptions=True)
+    made, problem = [], ""
+    for res in results:
+        if isinstance(res, Exception):
+            problem = str(res) if isinstance(res, portraits.PortraitError) else f"Picture failed ({type(res).__name__})."
+            logger.warning("image creator: %s", res)
+            continue
+        url = portraits.save(c["id"], res, kind="image", ext=_image_ext(res) or "png")
+        iid = await _exec("INSERT INTO images (character_id, url, prompt, shape, created_at) VALUES (?,?,?,?,?)",
+                          (c["id"], url, prompt, shape, time.time()))
+        made.append(_image_out(await _row("SELECT * FROM images WHERE id = ?", (iid,))))
+    if not made:
+        return _err(502, problem or "No picture came back. Try again.")
+    return JSONResponse({"images": made, "problem": problem})
+
+
+@router.delete("/images/{iid}")
+async def delete_image(iid: int, s: dict = Depends(_session)):
+    r = await _row("SELECT * FROM images WHERE id = ?", (iid,))
+    if not r:
+        return _err(404, "Picture not found")
+    await _exec("DELETE FROM images WHERE id = ?", (iid,))
+    in_use = await _row("SELECT id FROM characters WHERE avatar = ?", (r["url"],))
+    name = r["url"].rsplit("/", 1)[-1]
+    if not in_use and name and "/" not in name:
+        try:
+            (portraits.PORTRAIT_DIR / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return JSONResponse({"ok": True})
+
+
+@router.post("/images/{iid}/portrait")
+async def image_as_portrait(iid: int, s: dict = Depends(_session)):
+    """Use a gallery picture as its character's portrait."""
+    r = await _row("SELECT * FROM images WHERE id = ?", (iid,))
+    if not r:
+        return _err(404, "Picture not found")
+    await _exec("UPDATE characters SET avatar = ?, portrait_prompt = ?, updated_at = ? WHERE id = ?",
+                (r["url"], r["prompt"], time.time(), r["character_id"]))
+    return JSONResponse({"avatar": r["url"]})
+
+
 async def _portrait_prompt(request: Request, s: dict, c: dict) -> str:
     """Ask the chat model to expand the character card into a Z-Image prompt."""
     card = (f"Name: {c['name']}\nAge: {c['age']}\nGender: {c['gender']}\nTagline: {c['tagline']}\n"
@@ -1374,6 +1476,7 @@ async def delete_character(cid: int, s: dict = Depends(_session)):
         await db.execute("DELETE FROM conversations WHERE character_id = ?", (cid,))
         await db.execute("DELETE FROM novel_cast WHERE character_id = ?", (cid,))
         await db.execute("DELETE FROM memories WHERE character_id = ?", (cid,))
+        await db.execute("DELETE FROM images WHERE character_id = ?", (cid,))
         await db.execute("DELETE FROM characters WHERE id = ?", (cid,))
         await db.commit()
     return JSONResponse({"ok": True})

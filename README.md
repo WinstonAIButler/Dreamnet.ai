@@ -63,6 +63,11 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   service (only that prompt is sent, never your chats; `PORTRAIT_SERVICE=off`
   turns it off). "Upload a photo from your computer" takes a JPEG, PNG or WebP
   up to 10 MB.
+- **Create image and Gallery.** Pick a character, then a scene, outfit, pose,
+  shape (portrait, square, landscape, wide) and how many (1 to 4), plus extra
+  details and things to leave out. Pictures use the character's own looks, are
+  made the same way as portraits, and are kept in a gallery per character; any
+  of them can become the character's portrait.
 - **Detailed character profiles.** Beyond the basics, each character has a
   profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
   piercings, style, scent, voice), personality (temperament, desires, fears,
