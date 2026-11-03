@@ -839,3 +839,18 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
   color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
 .model-pick:focus { outline: none; border-color: var(--accent); }
 @media (max-width: 560px) { .model-pick { max-width: 120px; } }
+
+/* Gallery: videos and making more from a picture */
+.gimg video { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; background: #000; }
+.gimg.square video { aspect-ratio: 1 / 1; } .gimg.landscape video { aspect-ratio: 4 / 3; } .gimg.wide video { aspect-ratio: 16 / 9; }
+.gimg-badge { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  background: var(--accent); color: var(--on-accent); }
+.gimg-acts { flex-wrap: wrap; justify-content: flex-end; }
+.gimg-acts .btn { padding: 4px 9px; }
+.gimg-acts .ic { width: 14px; height: 14px; }
+.remix { max-width: 460px; display: flex; flex-direction: column; gap: 12px; }
+.remix h3 { margin: 0; font-family: var(--serif); font-size: 26px; }
+.remix-src { width: 100%; max-height: 260px; object-fit: contain; border-radius: 14px; background: var(--bg); }
+.gimg figcaption { flex-direction: column; align-items: stretch; }
+.gimg figcaption b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gimg-acts { margin-left: 0; justify-content: flex-start; gap: 4px; }

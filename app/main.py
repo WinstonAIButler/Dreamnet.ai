@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 
+import app.media_tools as media_tools
 from app.database import init_db, get_user_by_username
 from app.auth import hash_password, verify_password, needs_rehash, create_session, destroy_session, get_session_from_request
 from app.cache import ResponseCache
@@ -113,7 +114,9 @@ app.mount("/portraits", StaticFiles(directory=str(_studio.portraits.PORTRAIT_DIR
 async def private_pictures(request: Request, call_next):
     # Portraits and scene pictures are private: only a signed-in session sees them.
     if request.url.path.startswith("/portraits/"):
-        if not await get_session_from_request(DATABASE_PATH, request):
+        q = request.query_params  # a short-lived signed link, so an online model can fetch one picture
+        signed = q.get("sig") and media_tools.check_link(request.url.path, q.get("exp"), q.get("sig"))
+        if not signed and not await get_session_from_request(DATABASE_PATH, request):
             return JSONResponse({"error": "Not authenticated"}, status_code=401)
     return await call_next(request)
 

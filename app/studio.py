@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
 import app.image_studio as image_studio
+import app.media_tools as media_tools
 import app.option_images as option_images
 import app.places as places
 import app.portraits as portraits
@@ -435,6 +436,10 @@ async def init_studio_db(db_path: str):
             await db.execute("ALTER TABLE characters ADD COLUMN voice_profile TEXT NOT NULL DEFAULT ''")
         if "voice_style" not in cols:
             await db.execute("ALTER TABLE characters ADD COLUMN voice_style TEXT NOT NULL DEFAULT ''")
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(images)")).fetchall()]
+        if "kind" not in cols:
+            await db.execute("ALTER TABLE images ADD COLUMN kind TEXT NOT NULL DEFAULT 'image'")  # image | video
+            await db.execute("ALTER TABLE images ADD COLUMN source_id INTEGER NOT NULL DEFAULT 0")  # made from
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(conversations)")).fetchall()]
         if "summary" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
@@ -1064,12 +1069,14 @@ async def upload_portrait(request: Request, s: dict = Depends(_session)):
 
 @router.get("/image-options")
 async def image_options(s: dict = Depends(_session)):
-    return JSONResponse({**image_studio.options(), "enabled": portraits.can_make_portraits()})
+    return JSONResponse({**image_studio.options(), "enabled": portraits.can_make_portraits(),
+                         "video": media_tools.video_enabled()})
 
 
 def _image_out(r: dict) -> dict:
     return {"id": r["id"], "character_id": r["character_id"], "url": r["url"], "prompt": r["prompt"],
-            "shape": r["shape"], "created_at": r["created_at"]}
+            "shape": r["shape"], "kind": r.get("kind") or "image", "source_id": r.get("source_id") or 0,
+            "created_at": r["created_at"]}
 
 
 @router.get("/images")
@@ -1123,6 +1130,118 @@ async def create_images(request: Request, s: dict = Depends(_session)):
     return JSONResponse({"images": made, "problem": problem})
 
 
+def _portrait_file(url: str):
+    name = url.rsplit("/", 1)[-1]
+    if not url.startswith("/portraits/") or not name or name.startswith("."):
+        return None
+    path = portraits.PORTRAIT_DIR / name
+    return path if path.is_file() else None
+
+
+async def _save_image(c_id: int, data: bytes, prompt: str, shape: str, kind: str = "image", source_id: int = 0,
+                      ext: str | None = None) -> dict:
+    url = portraits.save(c_id, data, kind=kind, ext=ext or _image_ext(data) or "png")
+    iid = await _exec("INSERT INTO images (character_id, url, prompt, shape, kind, source_id, created_at) "
+                      "VALUES (?,?,?,?,?,?,?)", (c_id, url, prompt, shape, kind, source_id, time.time()))
+    return _image_out(await _row("SELECT * FROM images WHERE id = ?", (iid,)))
+
+
+@router.post("/images/{iid}/remix")
+async def remix_image(iid: int, request: Request, s: dict = Depends(_session)):
+    """New pictures that start from a gallery picture: same person, with the changes asked for."""
+    src = await _row("SELECT * FROM images WHERE id = ? AND kind = 'image'", (iid,))
+    if not src:
+        return _err(404, "Picture not found")
+    if not portraits.can_make_portraits():
+        return _err(503, "Picture making is off on this server (PORTRAIT_SERVICE=off and no ComfyUI).")
+    body = await request.json()
+    changes = str(body.get("changes") or "").strip()[:600]
+    if not changes:
+        return _err(400, "Say what to change, for example: now in a red dress on a balcony at night.")
+    if mentions_minor(changes, strict=True):
+        return _err(400, "Pictures must show adults only.")
+    shape = body.get("shape") if body.get("shape") in image_studio.SHAPES else src["shape"]
+    _, w, h = image_studio.SHAPES.get(shape, image_studio.SHAPES["portrait"])
+    count = max(1, min(image_studio.MAX_COUNT, int(body.get("count") or 1)))
+    path = _portrait_file(src["url"])
+    online = media_tools.remix_online_enabled() and not portraits.enabled() and path is not None
+    gate = asyncio.Semaphore(2)
+    note = ""
+
+    async def one():
+        nonlocal note
+        async with gate:
+            if online:
+                try:
+                    return await media_tools.remix_online(api_routes.http_client, src["url"],
+                                                          media_tools.remix_prompt(src["prompt"], changes), w, h), True
+                except media_tools.MediaError as e:
+                    logger.warning("remix fell back to a prompt: %s", e)
+                    note = "The editing service didn't answer, so these are fresh takes from the same description."
+            return await portraits.make_portrait(api_routes.http_client,
+                                                 media_tools.variation_prompt(src["prompt"], changes), w, h), False
+
+    results = await asyncio.gather(*(one() for _ in range(count)), return_exceptions=True)
+    made, problem = [], ""
+    for res in results:
+        if isinstance(res, Exception):
+            problem = str(res) if isinstance(res, portraits.PortraitError) else f"Picture failed ({type(res).__name__})."
+            continue
+        data, edited = res
+        prompt = media_tools.remix_prompt(src["prompt"], changes) if edited else media_tools.variation_prompt(src["prompt"], changes)
+        made.append(await _save_image(src["character_id"], data, prompt, shape, source_id=src["id"]))
+    if not made:
+        return _err(502, problem or "No picture came back. Try again.")
+    return JSONResponse({"images": made, "problem": problem or note})
+
+
+@router.post("/images/{iid}/video")
+async def animate_image(iid: int, request: Request, s: dict = Depends(_session)):
+    """A short video clip animated from a gallery picture."""
+    src = await _row("SELECT * FROM images WHERE id = ? AND kind = 'image'", (iid,))
+    if not src:
+        return _err(404, "Picture not found")
+    if not media_tools.video_enabled():
+        return _err(503, "Videos need a Replicate account: set REPLICATE_API_TOKEN on the server (see README).")
+    body = await request.json()
+    motion = str(body.get("motion") or "").strip()[:400] or "slowly turns toward the camera with a faint smile, hair moving softly"
+    if mentions_minor(motion, strict=True):
+        return _err(400, "Videos must show adults only.")
+    path = _portrait_file(src["url"])
+    if not path:
+        return _err(404, "That picture's file is missing.")
+    try:
+        mp4 = await media_tools.make_video(api_routes.http_client, path.read_bytes(), motion)
+    except media_tools.MediaError as e:
+        return _err(502, str(e))
+    return JSONResponse({"images": [await _save_image(src["character_id"], mp4, motion, src["shape"], kind="video",
+                                                      source_id=src["id"], ext="mp4")]})
+
+
+@router.get("/images/download")
+async def download_images(character_id: int = 0, s: dict = Depends(_session)):
+    """Every picture and video in the gallery (or one character's) as a zip file."""
+    import io
+    import zipfile
+    if character_id:
+        rows = await _rows("SELECT * FROM images WHERE character_id = ? ORDER BY id", (character_id,))
+    else:
+        rows = await _rows("SELECT * FROM images ORDER BY id")
+    names = {c["id"]: c["name"] for c in await _rows("SELECT id, name FROM characters")}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        for r in rows:
+            path = _portrait_file(r["url"])
+            if path:
+                who = re.sub(r"[^A-Za-z0-9]+", "-", names.get(r["character_id"], "character")).strip("-") or "character"
+                z.write(path, f"{who}/{who}-{r['id']}{path.suffix}")
+    if not rows:
+        return _err(404, "No pictures yet.")
+    label = re.sub(r"[^A-Za-z0-9]+", "-", names.get(character_id, "")).strip("-") if character_id else "all"
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="dreamnet-{label or "pictures"}.zip"'})
+
+
 @router.delete("/images/{iid}")
 async def delete_image(iid: int, s: dict = Depends(_session)):
     r = await _row("SELECT * FROM images WHERE id = ?", (iid,))
@@ -1142,7 +1261,7 @@ async def delete_image(iid: int, s: dict = Depends(_session)):
 @router.post("/images/{iid}/portrait")
 async def image_as_portrait(iid: int, s: dict = Depends(_session)):
     """Use a gallery picture as its character's portrait."""
-    r = await _row("SELECT * FROM images WHERE id = ?", (iid,))
+    r = await _row("SELECT * FROM images WHERE id = ? AND kind = 'image'", (iid,))
     if not r:
         return _err(404, "Picture not found")
     await _exec("UPDATE characters SET avatar = ?, portrait_prompt = ?, updated_at = ? WHERE id = ?",
