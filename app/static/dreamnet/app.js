@@ -680,6 +680,13 @@
 
   // ---------- characters ----------
 
+  function wantsPhoto(t) {
+    return /\bselfie\b/i.test(t) || /\b(send|show|take|snap|text)\b[^.?!]{0,40}\b(pic|pics|picture|photo|photos|image)\b/i.test(t);
+  }
+  function modelLabel(id) {
+    var m = state.models.filter(function (x) { return x.model_id === id; })[0];
+    return m ? m.display_name : (id || "").split("/").pop();
+  }
   function genderIs(g, tab) { return tab === "trans" ? /^trans /.test(g || "") : g === tab; }
   // The male or female side of a gender, for voices and names: a trans man is male, a trans woman female.
   function voiceGender(g) { return g === "male" || g === "trans man" ? "male" : "female"; }
@@ -1219,23 +1226,79 @@
 
   function imgCard(im, chars) {
     var ch = (chars || []).filter(function (c) { return c.id === im.character_id; })[0];
-    return '<figure class="gimg ' + esc(im.shape) + '" data-img="' + im.id + '">' +
-      '<a href="' + esc(im.url) + '" target="_blank" rel="noopener"><img src="' + esc(im.url) + '" alt="" loading="lazy"></a>' +
+    var vid = im.kind === "video", ext = (im.url.match(/\.(\w+)$/) || [, "png"])[1];
+    var fname = ((ch && ch.name) || "dreamnet").replace(/[^A-Za-z0-9]+/g, "-") + "-" + im.id + "." + ext;
+    return '<figure class="gimg ' + esc(im.shape) + (vid ? " video" : "") + '" data-img="' + im.id + '">' +
+      (vid ? '<video src="' + esc(im.url) + '" controls loop playsinline preload="metadata"></video>'
+        : '<a href="' + esc(im.url) + '" target="_blank" rel="noopener"><img src="' + esc(im.url) + '" alt="" loading="lazy"></a>') +
+      (vid ? '<span class="gimg-badge">Video</span>' : "") +
       '<figcaption>' + (ch ? "<b>" + esc(ch.name) + "</b>" : "") +
-      '<span class="gimg-acts"><button type="button" class="btn small" data-act="portrait" title="Use as portrait">' + ic("image") + " Portrait</button>" +
-      '<a class="btn small" href="' + esc(im.url) + '" download>Save</a></span></figcaption>' +
+      '<span class="gimg-acts">' +
+      (vid ? "" : '<button type="button" class="btn small" data-act="remix" title="Make new pictures from this one">' + ic("wand") + " More</button>" +
+        '<button type="button" class="btn small" data-act="video" title="Make a video from this picture">▶ Video</button>' +
+        '<button type="button" class="btn small" data-act="portrait" title="Use as portrait">' + ic("image") + "</button>") +
+      '<a class="btn small" href="' + esc(im.url) + '" download="' + esc(fname) + '" title="Download">⤓</a></span></figcaption>' +
       '<button type="button" class="gimg-del" data-act="del" title="Delete" aria-label="Delete">✕</button></figure>';
   }
 
-  function wireGallery(root, images, chars, after) {
+  // Make new pictures (or a video) from a gallery picture. "done" gets the new items.
+  function openRemix(im, mode, done) {
+    var count = 1, ov = document.createElement("div");
+    ov.className = "overlay";
+    var video = mode === "video";
+    ov.innerHTML = '<form class="modal form remix">' +
+      '<button type="button" class="close" aria-label="Close">×</button>' +
+      "<h3>" + (video ? "Make a video" : "Make new pictures from this one") + "</h3>" +
+      '<img class="remix-src" src="' + esc(im.url) + '" alt="">' +
+      (video ? '<label>What happens <span class="hint">a few seconds of motion</span><textarea id="rxText" rows="3" placeholder="Turns toward the camera and smiles, hair moving in the wind"></textarea></label>'
+        : '<label>What to change <span class="hint">same person, new everything else</span><textarea id="rxText" rows="3" placeholder="Now in a red silk dress on a balcony at night, city lights behind"></textarea></label>' +
+          '<div class="choices">' + [1, 2, 3, 4].map(function (n) {
+            return '<button type="button" class="chip' + (n === 1 ? " on" : "") + '" data-n="' + n + '">' + n + "</button>"; }).join("") + "</div>") +
+      '<p class="form-error" id="rxErr"></p>' +
+      '<div class="row"><button class="btn primary" id="rxGo">' + (video ? "▶ Make video" : ic("wand") + " Create") + '</button><span class="hint" id="rxSt"></span></div></form>';
+    document.body.appendChild(ov);
+    var form = ov.querySelector("form"), busy = false;
+    function close() { if (!busy) ov.remove(); }
+    ov.querySelector(".close").onclick = close;
+    ov.onclick = function (e) { if (e.target === ov) close(); };
+    ov.querySelectorAll("[data-n]").forEach(function (b) {
+      b.onclick = function () { count = +b.dataset.n; ov.querySelectorAll("[data-n]").forEach(function (x) { x.classList.toggle("on", x === b); }); };
+    });
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      var text = document.getElementById("rxText").value.trim(), err = document.getElementById("rxErr"), st = document.getElementById("rxSt");
+      if (!video && !text) { err.textContent = "Say what to change."; return; }
+      busy = true; document.getElementById("rxGo").disabled = true; err.textContent = "";
+      st.textContent = video ? "Making the video. This can take a few minutes." : count > 1 ? "Making " + count + " pictures…" : "Making the picture…";
+      api("/app/api/images/" + im.id + "/" + (video ? "video" : "remix"), { method: "POST",
+        body: video ? { motion: text } : { changes: text, count: count } })
+        .then(function (res) {
+          busy = false; ov.remove();
+          if (res.problem) toast(res.problem);
+          else toast(video ? "Video ready" : res.images.length > 1 ? res.images.length + " new pictures" : "New picture ready");
+          if (done) done(res.images);
+        })
+        .catch(function (e2) { busy = false; document.getElementById("rxGo").disabled = false; st.textContent = ""; err.textContent = e2.message; });
+    };
+    setTimeout(function () { document.getElementById("rxText").focus(); }, 0);
+  }
+
+  function wireGallery(root, images, chars, after, onNew) {
     root.querySelectorAll("[data-img]").forEach(function (fig) {
-      var id = +fig.dataset.img;
+      var id = +fig.dataset.img, im = images.filter(function (x) { return x.id === id; })[0];
       fig.querySelectorAll("[data-act]").forEach(function (b) {
         b.onclick = function () {
-          if (b.dataset.act === "portrait") {
+          var act = b.dataset.act;
+          if (act === "portrait") {
             api("/app/api/images/" + id + "/portrait", { method: "POST" }).then(function () { toast("Portrait updated"); })
               .catch(function (e) { toast(e.message, true); });
-          } else if (confirm("Delete this picture?")) {
+          } else if (act === "remix" || act === "video") {
+            if (act === "video" && !state.videoOn) {
+              toast("Videos need a Replicate account. Add REPLICATE_API_TOKEN in Render's environment settings, then redeploy.", true);
+              return;
+            }
+            openRemix(im, act, onNew);
+          } else if (confirm(im && im.kind === "video" ? "Delete this video?" : "Delete this picture?")) {
             api("/app/api/images/" + id, { method: "DELETE" }).then(function () {
               fig.remove(); if (after) after(id);
             }).catch(function (e) { toast(e.message, true); });
@@ -1250,6 +1313,7 @@
     view.innerHTML = '<div class="loading">Loading…</div>';
     Promise.all([api("/app/api/characters"), api("/app/api/image-options")]).then(function (r) {
       var chars = r[0], opt = r[1];
+      state.videoOn = !!opt.video;
       var pick = { character_id: charId || (chars[0] && chars[0].id) || 0, scene: "", outfit: "As they are",
         pose: "Portrait", shape: "portrait", count: 1 };
       if (!chars.length) {
@@ -1296,7 +1360,7 @@
           if (!out) return;
           out.innerHTML = list.length ? list.map(function (im) { return imgCard(im); }).join("")
             : '<div class="empty">No pictures yet. Pick a scene and press Create.</div>';
-          wireGallery(out, list, chars);
+          wireGallery(out, list, chars, null, function () { showGallery(); });
         });
       }
       view.querySelectorAll("[data-k]").forEach(function (b) {
@@ -1329,19 +1393,23 @@
   function viewGallery() {
     setNav("gallery");
     view.innerHTML = '<div class="loading">Loading…</div>';
-    Promise.all([api("/app/api/images"), api("/app/api/characters")]).then(function (r) {
+    Promise.all([api("/app/api/images"), api("/app/api/characters"), api("/app/api/image-options")]).then(function (r) {
       var images = r[0], chars = r[1], only = 0;
+      state.videoOn = !!r[2].video;
       function draw() {
         var list = only ? images.filter(function (im) { return im.character_id === only; }) : images;
         var have = chars.filter(function (c) { return images.some(function (im) { return im.character_id === c.id; }); });
         view.innerHTML =
-          '<div class="section-head"><h2>Gallery</h2><a class="btn small primary" href="#/images' + (only ? "/" + only : "") + '">' + ic("wand") + " Create image</a></div>" +
+          '<div class="section-head"><h2>Gallery</h2><div class="row">' +
+          (list.length ? '<a class="btn small" href="/app/api/images/download' + (only ? "?character_id=" + only : "") + '" download>⤓ Download ' + (only ? "these" : "all") + "</a>" : "") +
+          '<a class="btn small primary" href="#/images' + (only ? "/" + only : "") + '">' + ic("wand") + " Create image</a></div></div>" +
           (have.length > 1 ? '<div class="wiz-tiles chips gal-filter"><button type="button" class="chip' + (only ? "" : " on") + '" data-only="0">Everyone</button>' +
             have.map(function (c) { return '<button type="button" class="chip' + (only === c.id ? " on" : "") + '" data-only="' + c.id + '">' + esc(c.name) + "</button>"; }).join("") + "</div>" : "") +
           (list.length ? '<div class="gallery">' + list.map(function (im) { return imgCard(im, chars); }).join("") + "</div>"
             : '<div class="empty panel">No pictures yet. <a href="#/images">Create one</a>.</div>');
         view.querySelectorAll("[data-only]").forEach(function (b) { b.onclick = function () { only = +b.dataset.only; draw(); }; });
-        wireGallery(view, list, chars, function (id) { images = images.filter(function (im) { return im.id !== id; }); });
+        wireGallery(view, list, chars, function (id) { images = images.filter(function (im) { return im.id !== id; }); },
+          function (made) { images = made.concat(images); draw(); });
       }
       draw();
     }).catch(function (e) { view.innerHTML = '<div class="empty">' + esc(e.message) + "</div>"; });
@@ -1462,6 +1530,11 @@
         (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div></div>" +
         '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">' + ic("clock") + ' <span id="clockNow"></span></button>' +
         '<span class="grow"></span>' +
+        (state.models.length > 1 ? '<select class="model-pick" id="modelPick" title="Which AI writes the replies">' +
+          '<option value="">' + esc(modelLabel(state.me.default_model)) + " (default)</option>" +
+          state.models.filter(function (m) { return m.model_id !== state.me.default_model; }).map(function (m) {
+            return '<option value="' + esc(m.model_id) + '"' + (pref("rpModel", "") === m.model_id ? " selected" : "") + ">" + esc(m.display_name) + "</option>"; }).join("") +
+          "</select>" : "") +
         '<button type="button" class="icon-btn" id="voiceBtn" title="Read aloud settings">' + ic("speaker") + "</button>" +
         '<button type="button" class="icon-btn" id="memBtn" title="What ' + esc(c.name) + ' remembers">' + ic("book") + "</button>" +
         '<button type="button" class="icon-btn" id="delConv" title="Delete this scene">' + ic("trash") + "</button>" +
@@ -1761,13 +1834,16 @@
         if (opts.cont) target.typing = true; else list.push(target);
         render();
         ctrl = new AbortController();
-        stream("/app/api/conversations/" + convId + "/messages", opts.cont ? { content: "", continue: true } : { content: text }, function (t) {
+        stream("/app/api/conversations/" + convId + "/messages", Object.assign(opts.cont ? { content: "", continue: true } : { content: text }, pref("rpModel", "") ? { model_id: pref("rpModel", "") } : {}), function (t) {
           target.content = base + t; render();
         }, ctrl.signal).then(function () {
           return api("/app/api/conversations/" + convId);
         }).then(function (fresh) {
           list = fresh.messages; render();
           var last = list.length - 1;
+          // Asked for a photo ("send me a pic", "selfie?"): the reply comes with a picture of that moment.
+          if (text && state.me.portrait_gen && list[last] && list[last].role === "assistant" && !list[last].image && wantsPhoto(text))
+            makePicture(list[last]);
           if (list[last] && list[last].role === "assistant" && (calling || pref("autoRead", "0") === "1"))
             playVoice(last, function () { if (calling) listen(true); });
         }).catch(function (e) {
@@ -1946,6 +2022,14 @@
       };
       var voicePanel = document.getElementById("voicePanel");
       document.getElementById("voiceBtn").onclick = function () { voicePanel.hidden = !voicePanel.hidden; };
+      var modelPick = document.getElementById("modelPick");
+      if (modelPick) {
+        if (modelPick.value !== pref("rpModel", "")) setPref("rpModel", modelPick.value);  // a removed model falls back to the default
+        modelPick.onchange = function () {
+          setPref("rpModel", modelPick.value);
+          toast("Replies now come from " + modelPick.options[modelPick.selectedIndex].text.replace(" (default)", "") + ".");
+        };
+      }
       var autoRead = document.getElementById("autoRead"), readMode = document.getElementById("readMode");
       autoRead.checked = pref("autoRead", "0") === "1";
       readMode.value = pref("readMode", "all");

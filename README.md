@@ -68,6 +68,15 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   details and things to leave out. Pictures use the character's own looks, are
   made the same way as portraits, and are kept in a gallery per character; any
   of them can become the character's portrait.
+- **Download, make more, and video.** Every gallery picture can be downloaded
+  (or all of them as a zip). "More" makes new pictures from one: same person,
+  with the changes you describe. Online, the picture is handed to an image
+  editing model through a link that only works for 15 minutes (this needs the
+  site's public address, which Render provides as `RENDER_EXTERNAL_URL`, or set
+  `PUBLIC_URL`; `REMIX_SERVICE=off` turns it off and uses the picture's own
+  description instead). "Video" animates a picture into a short clip on
+  Replicate: set `REPLICATE_API_TOKEN` (and optionally `VIDEO_MODEL`, default
+  `wan-video/wan-2.2-i2v-fast`). Replicate charges per video.
 - **Detailed character profiles.** Beyond the basics, each character has a
   profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
   piercings, style, scent, voice), personality (temperament, desires, fears,
