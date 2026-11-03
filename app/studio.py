@@ -898,7 +898,7 @@ async def ai_fill(request: Request, s: dict = Depends(_session)):
                "character hides from the person they're falling for):\n" + prof_list if want_prof else "")
             + ('\n"persona" is personality and backstory in 3 to 5 sentences; "appearance" is 2 to 3 sentences of '
                'lifelike physical detail; "greeting" is an in-character opening line using *actions*, "speech" and '
-               '`thoughts`; "tags" is 3 to 6 comma-separated tags; "gender" is male, female or non-binary.'
+               '`thoughts`; "tags" is 3 to 6 comma-separated tags; "gender" is male, female, trans woman, trans man or non-binary.'
                if want_basic else "")},
     ]
     try:
@@ -916,7 +916,7 @@ async def ai_fill(request: Request, s: dict = Depends(_session)):
             out_basic["age"] = max(18, int(float(out_basic["age"])))
         except ValueError:
             out_basic.pop("age")
-    if out_basic.get("gender") not in (None, "male", "female", "non-binary"):
+    if out_basic.get("gender") not in (None, "male", "female", "trans woman", "trans man", "non-binary"):
         out_basic.pop("gender")
     out_prof = {k: v for k, v in profiles.clean(data.get("profile") or {}).items() if k in want_prof}
     texts = [str(v) for v in out_basic.values()] + [v["value"] for v in out_prof.values()]
@@ -1616,7 +1616,7 @@ async def option_image(set: str, key: str, g: str = "", s: dict = Depends(_sessi
     if mentions_minor(key, strict=True):
         return _err(400, "Pictures must show adults only.")
     try:
-        png = await option_images.get(api_routes.http_client, set, key, g if g in ("male", "female", "non-binary") else "")
+        png = await option_images.get(api_routes.http_client, set, key, g if g in ("male", "female", "trans woman", "trans man", "non-binary") else "")
     except option_images.OptionImageError as e:
         return _err(503, str(e))
     kind = "image/jpeg" if png[:3] == b"\xff\xd8\xff" else "image/webp" if png[8:12] == b"WEBP" else "image/png"
