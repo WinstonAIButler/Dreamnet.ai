@@ -811,3 +811,25 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
 .gimg-del { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%; border: 0; cursor: pointer;
   background: rgba(3,18,47,.75); color: var(--text); font-size: 13px; opacity: .8; }
 .gimg-del:hover { opacity: 1; background: var(--accent); color: var(--on-accent); }
+
+/* Explore */
+.explore-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.explore-head h2 { margin: 0; font-family: var(--serif); font-size: 38px; }
+.explore-head .lead { margin: 4px 0 0; }
+.explore-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+.explore-bar input[type=search] { flex: 1 1 260px; min-width: 0; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font: inherit; }
+.explore-bar input[type=search]:focus { outline: none; border-color: var(--accent); }
+.explore-bar .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.explore-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.explore-tags .tag { border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 12.5px; padding: 4px 10px; }
+.explore-tags .tag.on, .explore-tags .tag:hover { color: var(--text); border-color: var(--accent); background: rgba(241,145,109,.14); }
+.explore-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.explore-grid .empty { grid-column: 1 / -1; }
+.card-acts { position: absolute; top: 10px; right: 10px; z-index: 2; display: flex; gap: 6px; }
+.card-acts .edit-link { position: static; }
+.card-acts .edit-link .ic { width: 16px; height: 16px; }
+.card .card-chat { margin-top: 10px; opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; }
+.card:hover .card-chat, .card:focus-within .card-chat { opacity: 1; transform: none; }
+@media (hover: none) { .card .card-chat { opacity: 1; transform: none; } }
+@media (max-width: 560px) { .explore-grid { grid-template-columns: 1fr 1fr; } .explore-head h2 { font-size: 30px; } .card .card-chat { display: none; } }

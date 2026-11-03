@@ -613,7 +613,8 @@
   // ---------- router ----------
 
   var routes = [
-    [/^#?\/?$/, viewHome],
+    [/^#?\/?$/, viewCharacters],
+    [/^#\/studio$/, viewHome],
     [/^#\/characters$/, viewCharacters],
     [/^#\/character\/new$/, function () { viewGuidedCreate(); }],
     [/^#\/character\/new\/full$/, function () { viewCharacterForm(null); }],
@@ -679,30 +680,76 @@
 
   // ---------- characters ----------
 
+  // Explore: every character as a big photo card, with search, gender tabs and tag filters.
+  var explore = { q: "", g: "", tag: "" };
   function viewCharacters() {
     setNav("characters");
     api("/app/api/characters").then(function (chars) {
-      view.innerHTML =
-        '<div class="section-head"><h2>Characters</h2><a class="btn small primary" href="#/character/new">+ Create character</a></div>' +
-        '<p class="muted lead">Click a character to start a roleplay scene. Add them to a novel\'s cast from its story bible.</p>' +
-        '<div class="grid">' + chars.map(function (c) {
-          return '<div class="card" data-chat="' + c.id + '">' + avatar(c) +
-            '<a class="edit-link" href="#/character/' + c.id + '" title="Edit">✎</a>' +
-            '<div class="info"><h3>' + esc(c.name) + " <small>" + c.age + "</small></h3><p>" + esc(c.tagline) + "</p>" +
-            '<div class="tags">' + c.tags.split(",").filter(Boolean).map(function (t) {
-              return '<span class="tag">' + esc(t.trim()) + "</span>"; }).join("") + "</div></div></div>";
-        }).join("") +
-        '<a class="card new" href="#/character/new"><span class="plus">+</span>Create a character</a></div>';
-      view.querySelectorAll("[data-chat]").forEach(function (el) {
-        el.onclick = function (e) {
-          if (e.target.closest(".edit-link")) return;
-          var cid = +el.getAttribute("data-chat"), ch = chars.filter(function (x) { return x.id === cid; })[0] || {};
-          api("/app/api/conversations").then(function (list) {
-            var last = list.filter(function (cv) { return cv.character_id === cid && !cv.novel_id; })[0];
-            newScene({ character_id: cid }, ch.name, { resume: last ? last.id : null });
-          });
-        };
+      var counts = {};
+      chars.forEach(function (c) {
+        (c.tags || "").split(",").map(function (t) { return t.trim().toLowerCase(); }).filter(Boolean)
+          .forEach(function (t) { counts[t] = (counts[t] || 0) + 1; });
       });
+      var tags = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); }).slice(0, 18);
+      var genders = [["", "All"], ["female", "Women"], ["male", "Men"], ["non-binary", "Non-binary"], ["trans", "Trans"]]
+        .filter(function (g) { return !g[0] || chars.some(function (c) { return c.gender === g[0]; }); });
+      view.innerHTML =
+        '<div class="explore-head"><div><h2>Explore</h2><p class="muted lead">Pick someone to start a scene, or make someone new.</p></div>' +
+        '<div class="row"><a class="btn primary" href="#/character/new">+ Create character</a><a class="btn" href="#/images">' + ic("wand") + " Create image</a></div></div>" +
+        '<div class="explore-bar"><input type="search" id="exQ" placeholder="Search by name, job, trait…" value="' + esc(explore.q) + '">' +
+        (genders.length > 2 ? '<div class="tabs">' + genders.map(function (g) {
+          return '<button type="button" class="chip' + (explore.g === g[0] ? " on" : "") + '" data-g="' + g[0] + '">' + g[1] + "</button>"; }).join("") + "</div>" : "") +
+        "</div>" +
+        (tags.length ? '<div class="explore-tags">' + tags.map(function (t) {
+          return '<button type="button" class="tag' + (explore.tag === t ? " on" : "") + '" data-tag="' + esc(t) + '">#' + esc(t) + "</button>"; }).join("") + "</div>" : "") +
+        '<div class="grid explore-grid" id="exGrid"></div>';
+      function match(c) {
+        if (explore.g && c.gender !== explore.g) return false;
+        var tl = (c.tags || "").toLowerCase().split(",").map(function (t) { return t.trim(); });
+        if (explore.tag && tl.indexOf(explore.tag) < 0) return false;
+        if (explore.q) {
+          var hay = [c.name, c.tagline, c.tags, c.persona, c.appearance].join(" ").toLowerCase();
+          return explore.q.toLowerCase().split(/\s+/).every(function (w) { return hay.indexOf(w) >= 0; });
+        }
+        return true;
+      }
+      function draw() {
+        var list = chars.filter(match);
+        var grid = document.getElementById("exGrid");
+        grid.innerHTML = list.map(function (c) {
+          return '<div class="card" data-chat="' + c.id + '">' + avatar(c) +
+            '<div class="card-acts"><a class="edit-link" href="#/character/' + c.id + '" title="Edit">✎</a>' +
+            (state.me.portrait_gen ? '<a class="edit-link" href="#/images/' + c.id + '" title="Create pictures">' + ic("image") + "</a>" : "") + "</div>" +
+            '<div class="info"><h3>' + esc(c.name) + " <small>" + c.age + "</small></h3><p>" + esc(c.tagline) + "</p>" +
+            '<div class="tags">' + c.tags.split(",").filter(Boolean).slice(0, 4).map(function (t) {
+              return '<span class="tag">' + esc(t.trim()) + "</span>"; }).join("") + "</div>" +
+            '<span class="btn small primary card-chat">' + ic("chat") + " Chat</span></div></div>";
+        }).join("") +
+          (list.length ? "" : '<div class="empty panel">No one matches. <button type="button" class="btn small" id="exClear">Clear filters</button></div>') +
+          '<a class="card new" href="#/character/new"><span class="plus">+</span>Create a character</a>';
+        var clr = document.getElementById("exClear");
+        if (clr) clr.onclick = function () { explore = { q: "", g: "", tag: "" }; viewCharacters(); };
+        grid.querySelectorAll("[data-chat]").forEach(function (el) {
+          el.onclick = function (e) {
+            if (e.target.closest(".edit-link")) return;
+            var cid = +el.getAttribute("data-chat"), ch = chars.filter(function (x) { return x.id === cid; })[0] || {};
+            api("/app/api/conversations").then(function (list) {
+              var last = list.filter(function (cv) { return cv.character_id === cid && !cv.novel_id; })[0];
+              newScene({ character_id: cid }, ch.name, { resume: last ? last.id : null });
+            });
+          };
+        });
+      }
+      document.getElementById("exQ").oninput = function () { explore.q = this.value.trim(); draw(); };
+      view.querySelectorAll("[data-g]").forEach(function (b) {
+        b.onclick = function () { explore.g = b.dataset.g;
+          view.querySelectorAll("[data-g]").forEach(function (x) { x.classList.toggle("on", x === b); }); draw(); };
+      });
+      view.querySelectorAll("[data-tag]").forEach(function (b) {
+        b.onclick = function () { explore.tag = explore.tag === b.dataset.tag ? "" : b.dataset.tag;
+          view.querySelectorAll("[data-tag]").forEach(function (x) { x.classList.toggle("on", x.dataset.tag === explore.tag); }); draw(); };
+      });
+      draw();
     });
   }
 
@@ -798,7 +845,7 @@
     ];
   }
   function viewGuidedCreate() {
-    setNav("characters");
+    setNav("create");
     var steps = wizardSteps(), at = 0, picks = { age: 25, sound: "mysterious", accent: "" };
     function chosen(key) { var v = picks[key]; return Array.isArray(v) ? v : v ? [v] : []; }
     function tiles(st) {
@@ -931,7 +978,7 @@
   }
 
   function viewCharacterForm(id, guided) {
-    setNav("characters");
+    setNav(id ? "characters" : "create");
     var load = Promise.all([id ? api("/app/api/characters/" + id) : Promise.resolve(guided ? guided.c : {
       name: "", age: 30, gender: "male", tagline: "", appearance: "", persona: "", greeting: "", tags: "", color: "#F1916D", avatar: "", profile: {},
     }), api("/app/api/profile-fields")]);
@@ -2088,7 +2135,7 @@
       var del = document.getElementById("delNovel");
       if (del) del.onclick = function () {
         if (!confirm("Delete " + n.title + " and all its chapters? This can't be undone.")) return;
-        api("/app/api/novels/" + id, { method: "DELETE" }).then(function () { location.hash = "#/"; });
+        api("/app/api/novels/" + id, { method: "DELETE" }).then(function () { location.hash = "#/studio"; });
       };
     });
   }
