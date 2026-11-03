@@ -680,6 +680,9 @@
 
   // ---------- characters ----------
 
+  function wantsPhoto(t) {
+    return /\bselfie\b/i.test(t) || /\b(send|show|take|snap|text)\b[^.?!]{0,40}\b(pic|pics|picture|photo|photos|image)\b/i.test(t);
+  }
   function modelLabel(id) {
     var m = state.models.filter(function (x) { return x.model_id === id; })[0];
     return m ? m.display_name : (id || "").split("/").pop();
@@ -1838,6 +1841,9 @@
         }).then(function (fresh) {
           list = fresh.messages; render();
           var last = list.length - 1;
+          // Asked for a photo ("send me a pic", "selfie?"): the reply comes with a picture of that moment.
+          if (text && state.me.portrait_gen && list[last] && list[last].role === "assistant" && !list[last].image && wantsPhoto(text))
+            makePicture(list[last]);
           if (list[last] && list[last].role === "assistant" && (calling || pref("autoRead", "0") === "1"))
             playVoice(last, function () { if (calling) listen(true); });
         }).catch(function (e) {

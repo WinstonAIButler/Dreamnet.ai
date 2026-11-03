@@ -270,6 +270,9 @@ ANSWER_RULES = (
     "follow those directions (where the story goes, what happens next, how {name} or anyone else should act, who else appears) and keep writing "
     "the story; only answer out of character if they ask a question about the story itself."
 )
+# The user asking a character for a photo; the reply then describes the photo it sends.
+_PHOTO_ASK = re.compile(r"\bselfie\b|\b(send|show|take|snap|text)\b[^.?!]{0,40}\b(pic|pics|picture|photo|photos|image)\b",
+                        re.IGNORECASE)
 ANSWER_NUDGE = ("[Respond as {name}, and as any other characters in the scene, to the message above: answer any "
                 "question in it directly and react to what was said and done. Follow any out-of-character direction. "
                 "Never write for {user}.]")
@@ -2071,6 +2074,10 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
     if not more and messages[-1]["role"] == "user":
         # The system prompt is long; a reminder right after the user's words keeps a small model on them.
         messages[-1]["content"] += "\n\n" + ANSWER_NUDGE.format(name=c["name"], user=s["username"])
+        if _PHOTO_ASK.search(messages[-1]["content"].split("\n\n[Respond as")[0]):
+            messages[-1]["content"] += (f" They asked for a photo: {c['name']} takes one and sends it now. Describe in "
+                                        "*actions* exactly what the photo shows (pose, outfit, place, light) so it can "
+                                        "be pictured. Keep it tasteful.")
     if more:
         if not last or last["role"] != "assistant":
             return _err(400, "There's no reply to continue.")
