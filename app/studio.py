@@ -1178,8 +1178,8 @@ async def make_scene_picture(msg_id: int, request: Request, s: dict = Depends(_s
     m = await _row("SELECT * FROM messages WHERE id = ?", (msg_id,))
     if not m or m["role"] not in ("user", "assistant"):
         return _err(404, "Message not found")
-    if not portraits.enabled():
-        return _err(503, "Pictures need a ComfyUI server. Set COMFYUI_URL in .env (see README).")
+    if not portraits.can_make_portraits():
+        return _err(503, "Picture making is off on this server (PORTRAIT_SERVICE=off and no ComfyUI).")
     body = await request.json()
     prompt = str(body.get("prompt") or "").strip()[:4000]
     if not prompt:
@@ -1187,11 +1187,11 @@ async def make_scene_picture(msg_id: int, request: Request, s: dict = Depends(_s
     if mentions_minor(prompt, strict=True):
         return _err(400, "Pictures must show adults only.")
     try:
-        png = await portraits.generate(api_routes.http_client, prompt,
-                                       width=portraits.SCENE_WIDTH, height=portraits.SCENE_HEIGHT)
+        png = await portraits.make_portrait(api_routes.http_client, prompt,
+                                            portraits.SCENE_WIDTH, portraits.SCENE_HEIGHT)
     except portraits.PortraitError as e:
         return _err(502, str(e))
-    url = portraits.save(msg_id, png, kind="scene")
+    url = portraits.save(msg_id, png, kind="scene", ext=_image_ext(png) or "png")
     await _exec("UPDATE messages SET image = ?, image_prompt = ? WHERE id = ?", (url, prompt, msg_id))
     return JSONResponse({"image": url, "prompt": prompt})
 

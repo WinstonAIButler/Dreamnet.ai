@@ -833,3 +833,9 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
 .card:hover .card-chat, .card:focus-within .card-chat { opacity: 1; transform: none; }
 @media (hover: none) { .card .card-chat { opacity: 1; transform: none; } }
 @media (max-width: 560px) { .explore-grid { grid-template-columns: 1fr 1fr; } .explore-head h2 { font-size: 30px; } .card .card-chat { display: none; } }
+
+/* Chat: which AI writes the replies */
+.model-pick { max-width: 190px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2);
+  color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.model-pick:focus { outline: none; border-color: var(--accent); }
+@media (max-width: 560px) { .model-pick { max-width: 120px; } }

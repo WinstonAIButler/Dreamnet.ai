@@ -680,6 +680,10 @@
 
   // ---------- characters ----------
 
+  function modelLabel(id) {
+    var m = state.models.filter(function (x) { return x.model_id === id; })[0];
+    return m ? m.display_name : (id || "").split("/").pop();
+  }
   function genderIs(g, tab) { return tab === "trans" ? /^trans /.test(g || "") : g === tab; }
   // The male or female side of a gender, for voices and names: a trans man is male, a trans woman female.
   function voiceGender(g) { return g === "male" || g === "trans man" ? "male" : "female"; }
@@ -1462,6 +1466,11 @@
         (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div></div>" +
         '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">' + ic("clock") + ' <span id="clockNow"></span></button>' +
         '<span class="grow"></span>' +
+        (state.models.length > 1 ? '<select class="model-pick" id="modelPick" title="Which AI writes the replies">' +
+          '<option value="">' + esc(modelLabel(state.me.default_model)) + " (default)</option>" +
+          state.models.filter(function (m) { return m.model_id !== state.me.default_model; }).map(function (m) {
+            return '<option value="' + esc(m.model_id) + '"' + (pref("rpModel", "") === m.model_id ? " selected" : "") + ">" + esc(m.display_name) + "</option>"; }).join("") +
+          "</select>" : "") +
         '<button type="button" class="icon-btn" id="voiceBtn" title="Read aloud settings">' + ic("speaker") + "</button>" +
         '<button type="button" class="icon-btn" id="memBtn" title="What ' + esc(c.name) + ' remembers">' + ic("book") + "</button>" +
         '<button type="button" class="icon-btn" id="delConv" title="Delete this scene">' + ic("trash") + "</button>" +
@@ -1761,7 +1770,7 @@
         if (opts.cont) target.typing = true; else list.push(target);
         render();
         ctrl = new AbortController();
-        stream("/app/api/conversations/" + convId + "/messages", opts.cont ? { content: "", continue: true } : { content: text }, function (t) {
+        stream("/app/api/conversations/" + convId + "/messages", Object.assign(opts.cont ? { content: "", continue: true } : { content: text }, pref("rpModel", "") ? { model_id: pref("rpModel", "") } : {}), function (t) {
           target.content = base + t; render();
         }, ctrl.signal).then(function () {
           return api("/app/api/conversations/" + convId);
@@ -1946,6 +1955,14 @@
       };
       var voicePanel = document.getElementById("voicePanel");
       document.getElementById("voiceBtn").onclick = function () { voicePanel.hidden = !voicePanel.hidden; };
+      var modelPick = document.getElementById("modelPick");
+      if (modelPick) {
+        if (modelPick.value !== pref("rpModel", "")) setPref("rpModel", modelPick.value);  // a removed model falls back to the default
+        modelPick.onchange = function () {
+          setPref("rpModel", modelPick.value);
+          toast("Replies now come from " + modelPick.options[modelPick.selectedIndex].text.replace(" (default)", "") + ".");
+        };
+      }
       var autoRead = document.getElementById("autoRead"), readMode = document.getElementById("readMode");
       autoRead.checked = pref("autoRead", "0") === "1";
       readMode.value = pref("readMode", "all");
