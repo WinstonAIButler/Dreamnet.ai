@@ -24,7 +24,8 @@ _STYLE = ("RAW photo, real person, editorial beauty photography, 85mm portrait l
           "illustration, no text, no logo, no watermark.")
 _MACRO = ("RAW macro photograph, real human, 100mm macro lens, razor-sharp detail, true-to-life colours, soft "
           "diffused light. Not a drawing, not CGI, not 3D, not an illustration, no text, no logo, no watermark.")
-_WHO = {"male": "a man", "female": "a woman", "non-binary": "an androgynous person"}
+_WHO = {"male": "a man", "female": "a woman", "trans woman": "a transgender woman", "trans man": "a transgender man",
+        "non-binary": "an androgynous person"}
 
 # set: (template, size). {key} is the choice, {who} the character's gender.
 TEMPLATES = {
@@ -42,6 +43,10 @@ TEMPLATES = {
              "light: the curve of a shoulder and collarbone, natural texture and pores, no makeup.", SWATCH),
     "build": ("Full-body fashion photograph of {who} in their late twenties with a {key} build, fitted dark "
               "clothes, fully clothed, standing in a dim studio.", TILE),
+    "chest": ("Waist-up fashion photograph of {who} in their late twenties with a {key} bust (flat if it says flat), "
+              "in a fitted dark top, fully clothed, natural proportions.", TILE),
+    "butt": ("Full-body fashion photograph from behind of {who} in their late twenties with a {key} butt, looking "
+             "back over one shoulder, in fitted dark jeans, fully clothed, natural proportions.", TILE),
     "height": ("Full-body photograph of {who} in their late twenties who is {key}, standing in a doorway for scale, "
                "fully clothed in dark clothes.", TILE),
     "personality": ("Portrait of {who} in their late twenties whose expression and body language read as {key}, "

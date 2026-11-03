@@ -129,7 +129,7 @@
     stopSpeaking();
     var mode = pref("readMode", "all");
     return loadVoices().then(function (info) {
-      var id = v.voice || (info.defaults || {})[v.gender] || "en-US-AvaNeural";
+      var id = v.voice || (info.defaults || {})[v.gender] || (info.defaults || {})[voiceGender(v.gender)] || "en-US-AvaNeural";
       var studio = v.engine === "voicestudio";
       if (!studio && (id.indexOf("device:") === 0 || !info.enabled || onlineFailed)) return speakOnDevice(speakableText(text, mode), id, v, onEnd);
       return fetch("/app/api/tts", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
@@ -204,7 +204,7 @@
   function wireVoiceSection(form, c) {
     loadVoices().then(function (info) {
       var regionSel = form.voice_region, voiceSel = form.voice;
-      var current = c.voice || (info.defaults || {})[form.gender.value] || "en-US-AvaNeural";
+      var current = c.voice || (info.defaults || {})[form.gender.value] || (info.defaults || {})[voiceGender(form.gender.value)] || "en-US-AvaNeural";
       var curRegion = current.indexOf("device:") === 0 ? (deviceVoices().filter(function (v) { return v.name === current.slice(7); })[0] || { lang: "en-US" }).lang.replace("_", "-").slice(0, 5) : current.slice(0, 5);
       function regionOpts(list) {
         return list.map(function (r) {
@@ -225,7 +225,7 @@
           var val = "device:" + v.name;
           return '<option value="' + esc(val) + '"' + (val === current ? " selected" : "") + ">" + esc(v.name) + "</option>"; }).join("") + "</optgroup>" : "");
         if (voiceSel.value !== current) {  // new country: start on a voice that matches the character's gender
-          var g = form.gender.value === "male" ? "male" : "female";
+          var g = voiceGender(form.gender.value);
           voiceSel.value = (groups[g][0] || groups.female[0] || groups.male[0] || {}).id || voiceSel.value;
         }
       }
@@ -258,7 +258,7 @@
       form.vp_accent.innerHTML = opts(pre.accents, st.accent || "irish");
       form.vp_age.innerHTML = opts(pre.ages, st.age || (+form.age.value <= 25 ? "young" : +form.age.value <= 35 ? "middle" : +form.age.value <= 60 || +form.age.value > 100 ? "older" : "elder"));
       form.vp_sound.innerHTML = opts(pre.sounds, st.sound || "mysterious");
-      form.vp_gender.value = st.gender || (form.gender.value === "male" ? "male" : "female");
+      form.vp_gender.value = st.gender || voiceGender(form.gender.value);
       function showKind() {
         var preset = form.voice_kind.value === "preset";
         document.getElementById("presetBox").hidden = !preset;
@@ -680,6 +680,10 @@
 
   // ---------- characters ----------
 
+  function genderIs(g, tab) { return tab === "trans" ? /^trans /.test(g || "") : g === tab; }
+  // The male or female side of a gender, for voices and names: a trans man is male, a trans woman female.
+  function voiceGender(g) { return g === "male" || g === "trans man" ? "male" : "female"; }
+
   // Explore: every character as a big photo card, with search, gender tabs and tag filters.
   var explore = { q: "", g: "", tag: "" };
   function viewCharacters() {
@@ -692,7 +696,7 @@
       });
       var tags = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); }).slice(0, 18);
       var genders = [["", "All"], ["female", "Women"], ["male", "Men"], ["non-binary", "Non-binary"], ["trans", "Trans"]]
-        .filter(function (g) { return !g[0] || chars.some(function (c) { return c.gender === g[0]; }); });
+        .filter(function (g) { return !g[0] || chars.some(function (c) { return genderIs(c.gender, g[0]); }); });
       view.innerHTML =
         '<div class="explore-head"><div><h2>Explore</h2><p class="muted lead">Pick someone to start a scene, or make someone new.</p></div>' +
         '<div class="row"><a class="btn primary" href="#/character/new">+ Create character</a><a class="btn" href="#/images">' + ic("wand") + " Create image</a></div></div>" +
@@ -704,7 +708,7 @@
           return '<button type="button" class="tag' + (explore.tag === t ? " on" : "") + '" data-tag="' + esc(t) + '">#' + esc(t) + "</button>"; }).join("") + "</div>" : "") +
         '<div class="grid explore-grid" id="exGrid"></div>';
       function match(c) {
-        if (explore.g && c.gender !== explore.g) return false;
+        if (explore.g && !genderIs(c.gender, explore.g)) return false;
         var tl = (c.tags || "").toLowerCase().split(",").map(function (t) { return t.trim(); });
         if (explore.tag && tl.indexOf(explore.tag) < 0) return false;
         if (explore.q) {
@@ -768,6 +772,8 @@
   var NAMES = {
     male: ["Dante", "Lucien", "Kael", "Nikolai", "Rafael", "Silas", "Damien", "Elias", "Matteo", "Viktor", "Cassian", "Rowan"],
     female: ["Valentina", "Seraphina", "Mara", "Elena", "Isolde", "Noor", "Sienna", "Vesper", "Lilith", "Ines", "Katya", "Aurelia"],
+    "trans woman": ["Valentina", "Seraphina", "Isolde", "Vesper", "Aurelia", "Noor", "Katya", "Lilith", "Ines", "Mara"],
+    "trans man": ["Dante", "Lucien", "Kael", "Silas", "Elias", "Rowan", "Cassian", "Matteo", "Viktor", "Rafael"],
     "non-binary": ["Ash", "Riven", "Sage", "Wren", "Onyx", "Morgan", "Jude", "Ellis", "Nova", "Raven"]
   };
   var SURNAMES = ["Moretti", "Volkov", "Vale", "Draven", "Castellano", "Blackwood", "Ashford", "Kross", "Sinclair", "Delacroix", "Varga", "Thorne"];
@@ -805,7 +811,7 @@
   function wizardSteps() {
     var t = function (list) { return list.map(function (x) { return { v: x }; }); };
     return [
-      { key: "gender", title: "Who are they?", pick: "one", need: true, items: t(["female", "male", "non-binary"]) },
+      { key: "gender", title: "Who are they?", pick: "one", need: true, items: t(["female", "male", "trans woman", "trans man", "non-binary"]) },
       { key: "kind", title: "What are they?", pick: "one", need: true, note: "Supernatural is welcome; they still look like a real person.",
         items: t(["Human", "Vampire", "Elf", "Demon", "Fae", "Werewolf", "Witch or warlock", "Fallen angel"]),
         extra: { key: "heritage", title: "Heritage", pick: "one", items: t(["East Asian", "Black", "White", "Latino or Latina",
@@ -818,6 +824,11 @@
       { key: "build", title: "Body", pick: "one", need: true,
         items: t(["Slim", "Lean", "Athletic", "Curvy", "Voluptuous", "Muscular", "Broad-shouldered", "Full-figured"]),
         extra: { key: "height", title: "Height", pick: "one", items: t(["Petite", "Average height", "Tall", "Towering"]) } },
+      { key: "chest", title: "Curves", pick: "one", note: "Optional.", when: function (p) { return voiceGender(p.gender) === "female" || p.gender === "non-binary"; },
+        items: t(["Flat", "Small", "Medium", "Large", "Extra large"]),
+        extra: { key: "butt", title: "Butt", pick: "one", items: t(["Small", "Medium", "Large", "Extra large"]) } },
+      { key: "butt", title: "Butt", pick: "one", note: "Optional.", when: function (p) { return voiceGender(p.gender) === "male" && p.gender !== "non-binary"; },
+        items: t(["Small", "Medium", "Large", "Extra large"]) },
       { key: "name", title: "Name, age and voice", form: true },
       { key: "personality", title: "Personality", pick: 3, need: true, note: "Pick up to three.",
         items: t(["Seductive", "Shy", "Sweet", "Playful", "Passionate", "Adventurous", "Confident",
@@ -841,12 +852,13 @@
       { key: "turn_ons", title: "Turn-ons", pick: 4, note: "Optional. Pick up to four; only between consenting adults.", custom: true,
         items: t(["Lingerie", "Roleplay", "High heels", "Stockings", "Being in control", "Giving up control",
           "Spanking", "Collars", "Latex", "Slow and tender", "Praise", "Teasing", "Jealousy",
-          "Restraints", "Being watched", "Muscle worship", "Feet", "Vanilla"]) }
+          "Restraints", "Being watched", "Muscle worship", "Feet", "Vanilla"]) },
+      { key: "story", title: "First message and scenario", story: true }
     ];
   }
   function viewGuidedCreate() {
     setNav("create");
-    var steps = wizardSteps(), at = 0, picks = { age: 25, sound: "mysterious", accent: "" };
+    var all = wizardSteps(), steps = all, at = 0, picks = { age: 25, sound: "mysterious", accent: "" };
     function chosen(key) { var v = picks[key]; return Array.isArray(v) ? v : v ? [v] : []; }
     function tiles(st) {
       return '<div class="wiz-tiles">' + st.items.map(function (it) {
@@ -863,13 +875,20 @@
       }).join("") + "</div>";
     }
     function ready(st) {
+      if (st.story) return true;
       if (st.form) return (picks.name || "").trim() && +picks.age >= 18;
       return !st.need || chosen(st.key).length;
     }
     function draw() {
+      steps = all.filter(function (x) { return !x.when || x.when(picks); });
       var st = steps[at];
       var body;
-      if (st.form) {
+      if (st.story) {
+        body = '<p class="hint">Optional. Leave a box empty and the AI writes it from your picks.</p>' +
+          '<label class="wiz-custom">First message <span class="hint">how they open the first chat</span><textarea data-story="greeting" rows="3" maxlength="2000" placeholder="*She doesn\'t look up from the cards.* &quot;You\'re late.&quot;">' + esc(picks.greeting || "") + "</textarea></label>" +
+          '<label class="wiz-custom">Scenario <span class="hint">where your story starts</span><textarea data-story="scenario" rows="3" maxlength="1500" placeholder="You walk into her casino to pay back your brother\'s debt.">' + esc(picks.scenario || "") + "</textarea></label>" +
+          '<label class="wiz-custom">Tags <span class="hint">comma-separated, used on Explore</span><input data-story="extra_tags" maxlength="200" value="' + esc(picks.extra_tags || "") + '" placeholder="slow burn, enemies to lovers"></label>';
+      } else if (st.form) {
         var acc = [["", "Pick later"], ["irish", "Irish"], ["french", "French"], ["german", "German"], ["nordic", "Nordic"], ["italian", "Italian"], ["russian", "Russian"]];
         var snd = [["innocent", "Innocent"], ["mysterious", "Mysterious"], ["villain", "Villain"], ["possessed", "Possessed"]];
         body = '<div class="wiz-name"><label>Character name<div class="row"><input id="wName" maxlength="60" value="' + esc(picks.name || "") + '" placeholder="Name">' +
@@ -879,7 +898,8 @@
           '<h4 class="wiz-sub">Voice accent <span class="hint">every accent speaks English</span></h4><div class="choices">' + acc.map(function (a) {
             return '<button type="button" class="chip' + (picks.accent === a[0] ? " on" : "") + '" data-k="accent" data-v="' + a[0] + '">' + a[1] + "</button>"; }).join("") + "</div>" +
           '<h4 class="wiz-sub">Voice sound</h4><div class="choices">' + snd.map(function (a) {
-            return '<button type="button" class="chip' + (picks.sound === a[0] ? " on" : "") + '" data-k="sound" data-v="' + a[0] + '">' + a[1] + "</button>"; }).join("") + "</div>";
+            return '<button type="button" class="chip' + (picks.sound === a[0] ? " on" : "") + '" data-k="sound" data-v="' + a[0] + '">' + a[1] + "</button>"; }).join("") + "</div>" +
+          '<div class="row"><button type="button" class="btn small" id="wHear">▶ Hear the voice</button><span class="hint" id="wHearSt"></span></div>';
       } else {
         body = (st.note ? '<p class="hint">' + st.note + "</p>" : "") +
           (st.items.length > 12 ? '<input type="search" class="wiz-search" placeholder="Search" aria-label="Search">' : "") +
@@ -919,6 +939,8 @@
           var g = NAMES[picks.gender] || NAMES.female;
           document.getElementById("wName").value = g[Math.floor(Math.random() * g.length)] + " " + SURNAMES[Math.floor(Math.random() * SURNAMES.length)];
           picks.name = document.getElementById("wName").value; next.disabled = !ready(st);
+        } else if (b.id === "wHear") {
+          hearVoice(document.getElementById("wHearSt"));
         } else if (b.dataset.age) {
           var a = document.getElementById("wAge"); a.value = Math.max(18, (+a.value || 18) + +b.dataset.age); picks.age = +a.value;
         }
@@ -927,12 +949,31 @@
         if (e.target.id === "wName") picks.name = e.target.value;
         if (e.target.id === "wAge") picks.age = +e.target.value;
         if (e.target.dataset.custom) picks[e.target.dataset.custom + "_custom"] = e.target.value;
+        if (e.target.dataset.story) picks[e.target.dataset.story] = e.target.value;
         if (e.target.classList.contains("wiz-search")) {
           var q = e.target.value.trim().toLowerCase();
           w.querySelectorAll(".wiz-tiles:first-of-type .wiz-tile").forEach(function (t) { t.hidden = q && t.dataset.v.toLowerCase().indexOf(q) < 0; });
         }
         next.disabled = !ready(st);
       };
+    }
+    function ageGroupOf(age) { return age <= 25 ? "young" : age <= 35 ? "middle" : age <= 60 || age > 100 ? "older" : "elder"; }
+    function hearVoice(st) {
+      var g = voiceGender(picks.gender), name = (picks.name || "").trim() || "me";
+      var line = picks.sound === "innocent" ? "Hi. I didn't think you'd actually come. I'm glad you did." :
+        picks.sound === "villain" ? "You came all this way to see " + name + ". Brave. Or foolish." :
+        picks.sound === "possessed" ? "Don't run. I always find you. Always." : "Close the door. We need to talk, you and I.";
+      var body = { text: '"' + line + '"', mode: "words", tone: "natural" };
+      if (picks.accent) body.style = { accent: picks.accent, age: ageGroupOf(+picks.age || 25), gender: g, sound: picks.sound };
+      else body.voice = g === "male" ? "en-US-AndrewNeural" : "en-US-AvaNeural";
+      st.textContent = "Loading…";
+      fetch("/app/api/tts", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+        .then(function (r) {
+          if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) { throw new Error(d.error || "Voice unavailable"); });
+          return r.blob();
+        })
+        .then(function (blob) { st.textContent = ""; playAudio(blob, picks.accent ? picks.sound : null); })
+        .catch(function (e) { st.textContent = e.message; });
     }
     function list(key) {
       var v = chosen(key).slice(), c = (picks[key + "_custom"] || "").trim();
@@ -942,9 +983,11 @@
     function finish() {
       if (+picks.age < 18) { toast("Characters must be 18 or older.", true); return; }
       var g = picks.gender || "female", kind = picks.kind && picks.kind !== "Human" ? picks.kind.toLowerCase() : "";
-      var look = [picks.height, picks.build ? picks.build.toLowerCase() + " build" : ""].filter(Boolean).join(", ");
+      var look = [picks.height, picks.build ? picks.build.toLowerCase() + " build" : "",
+        picks.chest ? (picks.chest === "Flat" ? "flat chest" : picks.chest.toLowerCase() + " bust") : "",
+        picks.butt ? picks.butt.toLowerCase() + " butt" : ""].filter(Boolean).join(", ");
       var appearance = [
-        (picks.heritage ? picks.heritage + " " : "") + (kind ? kind : g === "male" ? "man" : g === "female" ? "woman" : "person") + (look ? ", " + look.toLowerCase() : "") + ".",
+        (picks.heritage ? picks.heritage + " " : "") + (kind ? kind : g === "male" ? "man" : g === "female" ? "woman" : g.indexOf("trans") === 0 ? g : "person") + (look ? ", " + look.toLowerCase() : "") + ".",
         picks.skin ? picks.skin + " skin." : "",
         picks.hair || picks.hair_style ? (picks.hair ? picks.hair + " hair" : "Hair") + (picks.hair_style ? ", " + picks.hair_style.toLowerCase() : "") + "." : "",
         picks.eyes ? picks.eyes + " eyes." : ""
@@ -962,15 +1005,18 @@
       if (rel) profile.relationship = P(rel);
       if (list("hobbies").length) profile.likes = P(list("hobbies").join(", "));
       if (list("turn_ons").length) profile.turn_ons = P(list("turn_ons").join(", "));
-      var age = +picks.age, ageGroup = age <= 25 ? "young" : age <= 35 ? "middle" : age <= 60 || age > 100 ? "older" : "elder";
+      var age = +picks.age, ageGroup = ageGroupOf(age);
+      var scenario = (picks.scenario || "").trim(), extraTags = (picks.extra_tags || "").split(",").map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
+      if (scenario) profile.how_met = P(scenario);
       var c = {
         name: picks.name.trim(), age: age, gender: g, tagline: "", appearance: appearance,
         persona: picks.name.trim() + " is " + (pers.length ? pers.join(", ").toLowerCase() : "hard to read") + "." +
-          (job ? " Works as: " + job + "." : "") + (rel ? " To you: " + rel + "." : ""),
-        greeting: "", tags: pers.concat(job ? [job] : []).join(", ").toLowerCase(), color: "#F1916D", avatar: "", profile: profile,
-        voice_style: picks.accent ? JSON.stringify({ accent: picks.accent, age: ageGroup, gender: g === "male" ? "male" : "female", sound: picks.sound }) : ""
+          (job ? " Works as: " + job + "." : "") + (rel ? " To you: " + rel + "." : "") + (scenario ? " Scenario: " + scenario : ""),
+        greeting: (picks.greeting || "").trim(), tags: pers.concat(job ? [job] : []).map(function (x) { return x.toLowerCase(); })
+          .concat(extraTags).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(", "), color: "#F1916D", avatar: "", profile: profile,
+        voice_style: picks.accent ? JSON.stringify({ accent: picks.accent, age: ageGroup, gender: voiceGender(g), sound: picks.sound }) : ""
       };
-      var idea = "A " + (pers.join(", ").toLowerCase() || "") + " " + (kind || (g === "male" ? "man" : g === "female" ? "woman" : "person")) +
+      var idea = "A " + (pers.join(", ").toLowerCase() || "") + " " + (kind || (g === "male" ? "man" : g === "female" ? "woman" : g.indexOf("trans") === 0 ? g : "person")) +
         (job ? ", " + job.toLowerCase() : "") + (rel ? ", who is " + rel.toLowerCase() + " to the user" : "") + ".";
       viewCharacterForm(null, { c: c, idea: idea });
     }
@@ -991,7 +1037,7 @@
         "<h2>" + (id ? "Edit " + esc(c.name) : "Create a character") + "</h2>" +
         '<div class="two"><label>Name<input name="name" required maxlength="60" value="' + esc(c.name) + '"></label>' +
         '<label>Age <span class="hint">18 or older</span><input name="age" type="number" min="18" max="9999" required value="' + esc(c.age) + '"></label></div>' +
-        '<div class="two"><label>Gender<select name="gender">' + ["male", "female", "non-binary"].map(function (g) {
+        '<div class="two"><label>Gender<select name="gender">' + ["male", "female", "trans woman", "trans man", "non-binary"].map(function (g) {
           return "<option" + (c.gender === g ? " selected" : "") + ">" + g + "</option>"; }).join("") + "</select></label>" +
         '<label>Colour<input name="color" type="color" value="' + esc(c.color) + '"></label></div>' +
         '<div class="ai-box"><div class="ai-head"><b>✨ Build with AI</b><span class="hint">or fill everything in yourself below; you can mix both</span></div>' +
