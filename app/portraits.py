@@ -134,14 +134,15 @@ def can_make_portraits() -> bool:
     return enabled() or online_enabled()
 
 
-async def make_portrait(client: httpx.AsyncClient, prompt: str) -> bytes:
-    """A character portrait: on ComfyUI when it's set up, otherwise from the online service."""
+async def make_portrait(client: httpx.AsyncClient, prompt: str, width: int = WIDTH, height: int = HEIGHT) -> bytes:
+    """A character portrait (or any picture of a given size): on ComfyUI when it's set up, otherwise from
+    the online service."""
     if enabled():
-        return await generate(client, prompt)
+        return await generate(client, prompt, width=width, height=height)
     if not online_enabled():
         raise PortraitError("Portrait generation is off. Upload a photo instead.")
     from urllib.parse import quote
-    url = ONLINE_SERVICE.format(prompt=quote(prompt[:ONLINE_PROMPT_CHARS], safe=""), width=WIDTH, height=HEIGHT,
+    url = ONLINE_SERVICE.format(prompt=quote(prompt[:ONLINE_PROMPT_CHARS], safe=""), width=width, height=height,
                                 seed=random.randint(1, 2**31 - 1))
     try:
         r = await client.get(url, timeout=ONLINE_TIMEOUT, follow_redirects=True)

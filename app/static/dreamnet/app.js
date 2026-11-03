@@ -618,6 +618,8 @@
     [/^#\/character\/new$/, function () { viewGuidedCreate(); }],
     [/^#\/character\/new\/full$/, function () { viewCharacterForm(null); }],
     [/^#\/time-rules$/, viewTimeRules],
+    [/^#\/images(?:\/(\d+))?$/, function (m) { viewImageCreator(m[1] ? +m[1] : 0); }],
+    [/^#\/gallery$/, viewGallery],
     [/^#\/character\/(\d+)$/, function (m) { viewCharacterForm(+m[1]); }],
     [/^#\/chats$/, function () { viewChat(null); }],
     [/^#\/chat\/(\d+)$/, function (m) { viewChat(+m[1]); }],
@@ -1116,7 +1118,140 @@
     var upload = '<div class="row"><label class="btn" id="uploadPortraitBtn">' + ic("image") +
       ' Upload a photo<input type="file" id="uploadPortrait" accept="image/jpeg,image/png,image/webp" hidden></label>' +
       '<span class="hint" id="uploadStatus">JPEG, PNG or WebP, up to 10 MB. Adults only.</span></div>';
-    return '<fieldset class="cast portrait"><legend>Photo</legend>' + inner + upload + "</fieldset>";
+    var more = id && state.me.portrait_gen ? '<div class="row"><a class="btn" href="#/images/' + id + '">' + ic("wand") + " Create more pictures</a></div>" : "";
+    return '<fieldset class="cast portrait"><legend>Photo</legend>' + inner + upload + more + "</fieldset>";
+  }
+
+  // ---------- image creator and gallery ----------
+
+  function imgCard(im, chars) {
+    var ch = (chars || []).filter(function (c) { return c.id === im.character_id; })[0];
+    return '<figure class="gimg ' + esc(im.shape) + '" data-img="' + im.id + '">' +
+      '<a href="' + esc(im.url) + '" target="_blank" rel="noopener"><img src="' + esc(im.url) + '" alt="" loading="lazy"></a>' +
+      '<figcaption>' + (ch ? "<b>" + esc(ch.name) + "</b>" : "") +
+      '<span class="gimg-acts"><button type="button" class="btn small" data-act="portrait" title="Use as portrait">' + ic("image") + " Portrait</button>" +
+      '<a class="btn small" href="' + esc(im.url) + '" download>Save</a></span></figcaption>' +
+      '<button type="button" class="gimg-del" data-act="del" title="Delete" aria-label="Delete">✕</button></figure>';
+  }
+
+  function wireGallery(root, images, chars, after) {
+    root.querySelectorAll("[data-img]").forEach(function (fig) {
+      var id = +fig.dataset.img;
+      fig.querySelectorAll("[data-act]").forEach(function (b) {
+        b.onclick = function () {
+          if (b.dataset.act === "portrait") {
+            api("/app/api/images/" + id + "/portrait", { method: "POST" }).then(function () { toast("Portrait updated"); })
+              .catch(function (e) { toast(e.message, true); });
+          } else if (confirm("Delete this picture?")) {
+            api("/app/api/images/" + id, { method: "DELETE" }).then(function () {
+              fig.remove(); if (after) after(id);
+            }).catch(function (e) { toast(e.message, true); });
+          }
+        };
+      });
+    });
+  }
+
+  function viewImageCreator(charId) {
+    setNav("images");
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    Promise.all([api("/app/api/characters"), api("/app/api/image-options")]).then(function (r) {
+      var chars = r[0], opt = r[1];
+      var pick = { character_id: charId || (chars[0] && chars[0].id) || 0, scene: "", outfit: "As they are",
+        pose: "Portrait", shape: "portrait", count: 1 };
+      if (!chars.length) {
+        view.innerHTML = '<div class="empty panel">Create a character first, then make pictures of them here. <a href="#/character/new">Create a character</a></div>';
+        return;
+      }
+      function tiles(key, list, photos) {
+        return '<div class="wiz-tiles' + (photos ? "" : " chips") + '">' + list.map(function (v) {
+          return '<button type="button" class="' + (photos ? "wiz-tile" : "chip") + (pick[key] === v ? " on" : "") + '" data-k="' + key + '" data-v="' + esc(v) + '">' +
+            (photos ? photoSpan("place", v) + '<span class="lbl">' + esc(v) + "</span>" : esc(v)) + "</button>";
+        }).join("") + "</div>";
+      }
+      view.innerHTML =
+        '<div class="section-head"><h2>Create image</h2><a class="btn small" href="#/gallery">Gallery</a></div>' +
+        (opt.enabled ? "" : '<div class="rp-problem">Picture making is turned off on this server.</div>') +
+        '<div class="imgc">' +
+        '<div class="imgc-form">' +
+        '<h3 class="wiz-sub">Character</h3><div class="imgc-chars">' + chars.map(function (c) {
+          return '<button type="button" class="imgc-char' + (c.id === pick.character_id ? " on" : "") + '" data-k="character_id" data-v="' + c.id + '">' +
+            avatar(c) + "<span>" + esc(c.name) + "</span></button>";
+        }).join("") + "</div>" +
+        '<h3 class="wiz-sub">Scene</h3>' + tiles("scene", opt.scenes, true) +
+        '<h3 class="wiz-sub">Outfit</h3>' + tiles("outfit", opt.outfits) +
+        '<h3 class="wiz-sub">Pose</h3>' + tiles("pose", opt.poses) +
+        '<h3 class="wiz-sub">Shape</h3><div class="wiz-tiles chips">' + opt.shapes.map(function (sh) {
+          return '<button type="button" class="chip shape' + (pick.shape === sh.key ? " on" : "") + '" data-k="shape" data-v="' + sh.key + '">' +
+            '<i style="aspect-ratio:' + sh.width + "/" + sh.height + '"></i>' + esc(sh.label) + "</button>";
+        }).join("") + "</div>" +
+        '<h3 class="wiz-sub">How many</h3><div class="wiz-tiles chips">' + [1, 2, 3, 4].filter(function (n) { return n <= opt.max_count; }).map(function (n) {
+          return '<button type="button" class="chip' + (pick.count === n ? " on" : "") + '" data-k="count" data-v="' + n + '">' + n + "</button>";
+        }).join("") + "</div>" +
+        '<label class="form">Extra details<textarea id="imgDetails" rows="2" placeholder="Anything else to show: a look, a prop, the light, the weather."></textarea></label>' +
+        '<label class="form">Leave out<input id="imgAvoid" placeholder="Things you don\'t want in the picture"></label>' +
+        '<div class="row"><button type="button" class="btn primary" id="imgGo"' + (opt.enabled ? "" : " disabled") + ">" + ic("wand") + ' Create</button><span class="hint" id="imgStatus"></span></div>' +
+        "</div>" +
+        '<div class="imgc-out"><h3 class="wiz-sub">Pictures of <span id="imgWho"></span></h3><div class="gallery" id="imgOut"><div class="loading">Loading…</div></div></div>' +
+        "</div>";
+      loadPhotos(view);
+      function showGallery() {
+        var c = chars.filter(function (x) { return x.id === pick.character_id; })[0];
+        document.getElementById("imgWho").textContent = c ? c.name : "";
+        api("/app/api/images?character_id=" + pick.character_id).then(function (list) {
+          var out = document.getElementById("imgOut");
+          if (!out) return;
+          out.innerHTML = list.length ? list.map(function (im) { return imgCard(im); }).join("")
+            : '<div class="empty">No pictures yet. Pick a scene and press Create.</div>';
+          wireGallery(out, list, chars);
+        });
+      }
+      view.querySelectorAll("[data-k]").forEach(function (b) {
+        b.onclick = function () {
+          var k = b.dataset.k, v = b.dataset.v;
+          if (k === "character_id" || k === "count") v = +v;
+          if (k === "scene" && pick.scene === v) v = "";  // tap again to clear
+          pick[k] = v;
+          view.querySelectorAll('[data-k="' + k + '"]').forEach(function (x) { x.classList.toggle("on", x.dataset.v === String(v)); });
+          if (k === "character_id") { history.replaceState(null, "", "#/images/" + v); showGallery(); }
+        };
+      });
+      document.getElementById("imgGo").onclick = function () {
+        var btn = this, st = document.getElementById("imgStatus");
+        btn.disabled = true;
+        st.textContent = pick.count > 1 ? "Making " + pick.count + " pictures. This can take a minute or two." : "Making the picture. This can take a minute.";
+        api("/app/api/images", { method: "POST", body: Object.assign({}, pick, {
+          details: document.getElementById("imgDetails").value, avoid: document.getElementById("imgAvoid").value }) })
+          .then(function (res) {
+            st.textContent = res.problem ? "Some pictures failed: " + res.problem : "";
+            showGallery();
+          })
+          .catch(function (e) { st.textContent = e.message; })
+          .then(function () { btn.disabled = false; });
+      };
+      showGallery();
+    }).catch(function (e) { view.innerHTML = '<div class="empty">' + esc(e.message) + "</div>"; });
+  }
+
+  function viewGallery() {
+    setNav("gallery");
+    view.innerHTML = '<div class="loading">Loading…</div>';
+    Promise.all([api("/app/api/images"), api("/app/api/characters")]).then(function (r) {
+      var images = r[0], chars = r[1], only = 0;
+      function draw() {
+        var list = only ? images.filter(function (im) { return im.character_id === only; }) : images;
+        var have = chars.filter(function (c) { return images.some(function (im) { return im.character_id === c.id; }); });
+        view.innerHTML =
+          '<div class="section-head"><h2>Gallery</h2><a class="btn small primary" href="#/images' + (only ? "/" + only : "") + '">' + ic("wand") + " Create image</a></div>" +
+          (have.length > 1 ? '<div class="wiz-tiles chips gal-filter"><button type="button" class="chip' + (only ? "" : " on") + '" data-only="0">Everyone</button>' +
+            have.map(function (c) { return '<button type="button" class="chip' + (only === c.id ? " on" : "") + '" data-only="' + c.id + '">' + esc(c.name) + "</button>"; }).join("") + "</div>" : "") +
+          (list.length ? '<div class="gallery">' + list.map(function (im) { return imgCard(im, chars); }).join("") + "</div>"
+            : '<div class="empty panel">No pictures yet. <a href="#/images">Create one</a>.</div>');
+        view.querySelectorAll("[data-only]").forEach(function (b) { b.onclick = function () { only = +b.dataset.only; draw(); }; });
+        wireGallery(view, list, chars, function (id) { images = images.filter(function (im) { return im.id !== id; }); });
+      }
+      draw();
+    }).catch(function (e) { view.innerHTML = '<div class="empty">' + esc(e.message) + "</div>"; });
   }
 
   // ---------- roleplay chat ----------
