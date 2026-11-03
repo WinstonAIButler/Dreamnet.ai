@@ -857,3 +857,7 @@ main.page-chat { max-width: 1680px; padding-top: 16px; padding-bottom: 16px; }
 .imgc-out-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .remix .check-line { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
 .remix select, .remix input[type=file] { width: 100%; }
+.heat-pick { max-width: 104px; }
+.rp-head .clock { min-width: 0; overflow: hidden; white-space: nowrap; justify-content: flex-start; text-overflow: ellipsis; }
+.rp-head .model-pick { flex-shrink: 0; width: 150px; }
+.rp-head .heat-pick { width: 96px; }
