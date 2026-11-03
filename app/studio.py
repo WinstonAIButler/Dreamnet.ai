@@ -1149,6 +1149,28 @@ async def _save_image(c_id: int, data: bytes, prompt: str, shape: str, kind: str
     return _image_out(await _row("SELECT * FROM images WHERE id = ?", (iid,)))
 
 
+@router.post("/images/upload")
+async def upload_image(request: Request, character_id: int = 0, shape: str = "portrait", consent: int = 0,
+                       s: dict = Depends(_session)):
+    """Add a picture from the user's computer to a character's gallery, so More and Video can start from it.
+    The raw image bytes are the body."""
+    c = await _row("SELECT * FROM characters WHERE id = ?", (character_id,))
+    if not c:
+        return _err(404, "Pick a character first.")
+    if not consent:
+        return _err(400, "Confirm the picture is yours to use and shows adults only.")
+    data = await request.body()
+    if len(data) > MAX_UPLOAD_BYTES:
+        return _err(413, "That picture is too big. Use one under 10 MB.")
+    ext = _image_ext(data)
+    if not ext:
+        return _err(400, "Upload a JPEG, PNG or WebP picture.")
+    shape = shape if shape in image_studio.SHAPES else "portrait"
+    # Its description is the character's own, so "More" still knows who it shows if the picture can't be sent.
+    prompt = image_studio.build_prompt(c, profiles.looks(profiles.clean(c.get("profile"))), "", "", "", "", "")
+    return JSONResponse({"images": [await _save_image(c["id"], data, prompt, shape, ext=ext)]})
+
+
 @router.post("/images/{iid}/remix")
 async def remix_image(iid: int, request: Request, s: dict = Depends(_session)):
     """New pictures that start from a gallery picture: same person, with the changes asked for."""

@@ -1283,6 +1283,49 @@
     setTimeout(function () { document.getElementById("rxText").focus(); }, 0);
   }
 
+  // Bring a picture from your computer into a character's gallery, to start More or Video from it.
+  function openUpload(chars, charId, done) {
+    var ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.innerHTML = '<form class="modal form remix">' +
+      '<button type="button" class="close" aria-label="Close">×</button><h3>Upload a picture</h3>' +
+      '<label>Character<select id="upChar">' + chars.map(function (c) {
+        return '<option value="' + c.id + '"' + (c.id === charId ? " selected" : "") + ">" + esc(c.name) + "</option>"; }).join("") + "</select></label>" +
+      '<label>Picture <span class="hint">JPEG, PNG or WebP, up to 10 MB</span><input type="file" id="upFile" accept="image/jpeg,image/png,image/webp" required></label>' +
+      '<img class="remix-src" id="upPrev" alt="" hidden>' +
+      '<label class="check-line"><input type="checkbox" id="upOk"> This picture is mine to use, and everyone in it is an adult.</label>' +
+      '<p class="form-error" id="upErr"></p>' +
+      '<div class="row"><button class="btn primary" id="upGo">' + ic("image") + ' Add to gallery</button><span class="hint" id="upSt"></span></div></form>';
+    document.body.appendChild(ov);
+    var shape = "portrait", file = null;
+    function close() { ov.remove(); }
+    ov.querySelector(".close").onclick = close;
+    ov.onclick = function (e) { if (e.target === ov) close(); };
+    document.getElementById("upFile").onchange = function () {
+      file = this.files[0] || null;
+      var prev = document.getElementById("upPrev");
+      if (!file) { prev.hidden = true; return; }
+      var url = URL.createObjectURL(file);
+      prev.onload = function () {
+        var r = prev.naturalWidth / prev.naturalHeight;
+        shape = r > 1.55 ? "wide" : r > 1.12 ? "landscape" : r > 0.9 ? "square" : "portrait";
+      };
+      prev.src = url; prev.hidden = false;
+    };
+    ov.querySelector("form").onsubmit = function (e) {
+      e.preventDefault();
+      var err = document.getElementById("upErr");
+      if (!file) { err.textContent = "Choose a picture."; return; }
+      if (file.size > 10 * 1024 * 1024) { err.textContent = "That picture is too big. Use one under 10 MB."; return; }
+      if (!document.getElementById("upOk").checked) { err.textContent = "Tick the box to confirm."; return; }
+      var cid = +document.getElementById("upChar").value;
+      document.getElementById("upGo").disabled = true; document.getElementById("upSt").textContent = "Uploading…";
+      api("/app/api/images/upload?character_id=" + cid + "&shape=" + shape + "&consent=1", { method: "POST", file: file })
+        .then(function (res) { close(); toast("Added to the gallery. Use More or Video on it."); if (done) done(res.images, cid); })
+        .catch(function (e2) { document.getElementById("upGo").disabled = false; document.getElementById("upSt").textContent = ""; err.textContent = e2.message; });
+    };
+  }
+
   function wireGallery(root, images, chars, after, onNew) {
     root.querySelectorAll("[data-img]").forEach(function (fig) {
       var id = +fig.dataset.img, im = images.filter(function (x) { return x.id === id; })[0];
@@ -1349,7 +1392,9 @@
         '<label class="form">Leave out<input id="imgAvoid" placeholder="Things you don\'t want in the picture"></label>' +
         '<div class="row"><button type="button" class="btn primary" id="imgGo"' + (opt.enabled ? "" : " disabled") + ">" + ic("wand") + ' Create</button><span class="hint" id="imgStatus"></span></div>' +
         "</div>" +
-        '<div class="imgc-out"><h3 class="wiz-sub">Pictures of <span id="imgWho"></span></h3><div class="gallery" id="imgOut"><div class="loading">Loading…</div></div></div>' +
+        '<div class="imgc-out"><div class="imgc-out-head"><h3 class="wiz-sub">Pictures of <span id="imgWho"></span></h3>' +
+        '<button type="button" class="btn small" id="imgUpload">' + ic("image") + " Upload</button></div>" +
+        '<div class="gallery" id="imgOut"><div class="loading">Loading…</div></div></div>' +
         "</div>";
       loadPhotos(view);
       function showGallery() {
@@ -1373,6 +1418,12 @@
           if (k === "character_id") { history.replaceState(null, "", "#/images/" + v); showGallery(); }
         };
       });
+      document.getElementById("imgUpload").onclick = function () {
+        openUpload(chars, pick.character_id, function (made, cid) {
+          if (cid !== pick.character_id) { location.hash = "#/images/" + cid; return; }
+          showGallery();
+        });
+      };
       document.getElementById("imgGo").onclick = function () {
         var btn = this, st = document.getElementById("imgStatus");
         btn.disabled = true;
@@ -1401,6 +1452,7 @@
         var have = chars.filter(function (c) { return images.some(function (im) { return im.character_id === c.id; }); });
         view.innerHTML =
           '<div class="section-head"><h2>Gallery</h2><div class="row">' +
+          (chars.length ? '<button type="button" class="btn small" id="galUpload">' + ic("image") + " Upload</button>" : "") +
           (list.length ? '<a class="btn small" href="/app/api/images/download' + (only ? "?character_id=" + only : "") + '" download>⤓ Download ' + (only ? "these" : "all") + "</a>" : "") +
           '<a class="btn small primary" href="#/images' + (only ? "/" + only : "") + '">' + ic("wand") + " Create image</a></div></div>" +
           (have.length > 1 ? '<div class="wiz-tiles chips gal-filter"><button type="button" class="chip' + (only ? "" : " on") + '" data-only="0">Everyone</button>' +
@@ -1408,6 +1460,8 @@
           (list.length ? '<div class="gallery">' + list.map(function (im) { return imgCard(im, chars); }).join("") + "</div>"
             : '<div class="empty panel">No pictures yet. <a href="#/images">Create one</a>.</div>');
         view.querySelectorAll("[data-only]").forEach(function (b) { b.onclick = function () { only = +b.dataset.only; draw(); }; });
+        var up = document.getElementById("galUpload");
+        if (up) up.onclick = function () { openUpload(chars, only, function (made) { images = made.concat(images); draw(); }); };
         wireGallery(view, list, chars, function (id) { images = images.filter(function (im) { return im.id !== id; }); },
           function (made) { images = made.concat(images); draw(); });
       }
