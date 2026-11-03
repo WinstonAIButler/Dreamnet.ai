@@ -275,7 +275,7 @@ tools.
 
 `app/jarvis.py` is a Python port of the shared Jarvis engine (`jarvis-core.js` in the other repos) and `app/static/jarvis.html` is the page. Set these on Render (Dashboard → the service → Environment) or in `.env`:
 
-- `JARVIS_ACCESS_CODE` (required): the passphrase the page asks for. Jarvis stays locked until it's set.
+- `JARVIS_ACCESS_CODE` (optional): leave it empty and Jarvis opens for anyone with the link; set it to require a passphrase.
 - `ANTHROPIC_API_KEY`: Claude, for briefings and questions. Jarvis is the only part of Dreamnet that uses it.
 - `JARVIS_STRIPE_KEY` (optional): a restricted Stripe key with Read on Balance, Charges, Subscriptions and Invoices.
 - `GITHUB_TOKEN`: a fine-grained token with read-only Contents, Pull requests and Deployments on this repo.

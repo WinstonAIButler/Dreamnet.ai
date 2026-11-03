@@ -347,7 +347,6 @@
       const res = await fetch(API);
       const cfg = await res.json();
       const items = [];
-      if (!cfg.accessCodeSet) items.push("Set <code>JARVIS_ACCESS_CODE</code> in the hosting environment. Jarvis stays locked until it's set.");
       if (!cfg.claude) items.push("Set <code>ANTHROPIC_API_KEY</code> so Jarvis can write briefings and answer questions.");
       if (!cfg.githubToken) items.push("Set <code>GITHUB_TOKEN</code> (a fine-grained, read-only token) so Jarvis can read private repos.");
       for (const c of cfg.companies || []) {
@@ -385,7 +384,11 @@
     ask(q);
   });
 
-  if (code) open(); else lock("");
+  // Open straight away unless a code has been set (JARVIS_ACCESS_CODE) and this browser hasn't entered it.
+  fetch(API)
+    .then((r) => r.json())
+    .then((cfg) => { if (code || !cfg.accessCodeSet) open(); else lock(""); })
+    .catch(() => { if (code) open(); else lock(""); });
 })();
 </script>
 </body>

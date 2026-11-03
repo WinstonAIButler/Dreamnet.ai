@@ -7,7 +7,7 @@ and has Claude write a briefing and answer questions. Same API and page as the
 other companies, so the Joslin Enterprises master Jarvis treats it the same way.
 
 Environment variables:
-  JARVIS_ACCESS_CODE  required; Jarvis stays locked until it is set
+  JARVIS_ACCESS_CODE  optional; if set, the page asks for it (Jarvis is open without it)
   ANTHROPIC_API_KEY   Claude, for briefings and questions
   JARVIS_STRIPE_KEY   a restricted, read-only Stripe key (falls back to STRIPE_SECRET_KEY)
   GITHUB_TOKEN        a fine-grained, read-only token for this repo
@@ -330,11 +330,10 @@ async def jarvis_setup():
 @router.post("/api/jarvis")
 async def jarvis_api(request: Request):
     cfg = config()
-    if not cfg["access_code"]:
-        return _json({"error": "Jarvis is locked until JARVIS_ACCESS_CODE is set in the hosting environment."}, 503)
-    given = request.headers.get("x-jarvis-code", "")
-    if not given or not _same_secret(given, cfg["access_code"]):
-        return _json({"error": "Wrong or missing access code."}, 401)
+    if cfg["access_code"]:  # open by default; a code, when set, locks it
+        given = request.headers.get("x-jarvis-code", "")
+        if not given or not _same_secret(given, cfg["access_code"]):
+            return _json({"error": "Wrong or missing access code."}, 401)
     try:
         body = await request.json()
     except ValueError:
