@@ -5,7 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Dreamnet · Dark romance studio</title>
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="#03122F">
+<meta name="theme-color" content="#0a0a0d">
+<script>
+  // Theme before first paint: Midnight (default) or Dusk, remembered on this device.
+  (function () { var t = "midnight"; try { t = localStorage.getItem("dn-theme") || t; } catch (e) {}
+    document.documentElement.setAttribute("data-theme", t); })();
+</script>
 <link rel="manifest" href="/static/dreamnet/manifest.webmanifest">
 <link rel="icon" href="/static/dreamnet/icon.svg" type="image/svg+xml">
 <link rel="icon" href="/static/dreamnet/favicon.ico" sizes="any">
@@ -13,24 +18,24 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,300;1,400&family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Literata:opsz,wght@7..72,400;7..72,500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/dreamnet/app.css?v=37">
+<link rel="stylesheet" href="/static/dreamnet/app.css?v=38">
 </head>
 <body>
 <header class="topbar" id="topbar" hidden>
   <a class="brand" href="#/"><img class="brand-mark" src="/static/dreamnet/icon.svg" alt=""> <span class="brand-name">Dreamnet</span></a>
   <nav class="nav">
-    <a href="#/" data-nav="characters">Explore</a>
-    <a href="#/chats" data-nav="chats">Chat</a>
-    <a href="#/character/new" data-nav="create">Create character</a>
-    <a href="#/images" data-nav="images">Create image</a>
-    <a href="#/gallery" data-nav="gallery">Gallery</a>
-    <a href="#/studio" data-nav="home">Studio</a>
+    <a href="#/" data-nav="characters" data-ic="compass"><span>Explore</span></a>
+    <a href="#/chats" data-nav="chats" data-ic="chat"><span>Chat</span></a>
+    <a href="#/character/new" data-nav="create" data-ic="userplus"><span class="lbl-long">Create character</span><span class="lbl-short">Create</span></a>
+    <a href="#/images" data-nav="images" data-ic="wand"><span class="lbl-long">Create image</span><span class="lbl-short">Generate</span></a>
+    <a href="#/gallery" data-nav="gallery" data-ic="image"><span>Gallery</span></a>
+    <a href="#/studio" data-nav="home" data-ic="book"><span>Studio</span></a>
   </nav>
   <div class="account" id="account"></div>
 </header>
 
 <main id="view"></main>
 
-<script src="/static/dreamnet/app.js?v=37"></script>
+<script src="/static/dreamnet/app.js?v=38"></script>
 </body>
 </html>

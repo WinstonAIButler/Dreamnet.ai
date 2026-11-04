@@ -510,6 +510,8 @@
   var ICONS = {
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+    userplus: '<circle cx="10" cy="8" r="4"/><path d="M3 20a7 7 0 0 1 14 0M19 8v6M16 11h6"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     chatplus: '<path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/>',
     search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
@@ -601,10 +603,25 @@
       '<div class="menu"><button class="btn small ghost" id="menuBtn">' + esc(state.me.username) + " ▾</button>" +
       '<div class="menu-list" id="menuList" hidden>' +
       (state.me.is_admin ? '<a href="/admin">Models &amp; usage</a>' : "") +
+      '<div class="theme-row"><button type="button" data-theme="midnight">Midnight</button><button type="button" data-theme="dusk">Dusk</button></div>' +
       '<button id="logoutBtn">Lock</button></div></div>';
     document.getElementById("menuBtn").onclick = function () {
       var l = document.getElementById("menuList"); l.hidden = !l.hidden;
     };
+    function markTheme() {
+      var cur = document.documentElement.getAttribute("data-theme") || "midnight";
+      el.querySelectorAll("[data-theme]").forEach(function (b) { b.classList.toggle("on", b.dataset.theme === cur); });
+    }
+    el.querySelectorAll("[data-theme]").forEach(function (b) {
+      b.onclick = function () {
+        document.documentElement.setAttribute("data-theme", b.dataset.theme);
+        try { localStorage.setItem("dn-theme", b.dataset.theme); } catch (e) {}
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", b.dataset.theme === "dusk" ? "#03122F" : "#0a0a0d");
+        markTheme();
+      };
+    });
+    markTheme();
     document.getElementById("logoutBtn").onclick = function () {
       fetch("/api/logout", { method: "POST", credentials: "same-origin" }).then(showLogin);
     };
@@ -2555,6 +2572,9 @@
       if (!me.authenticated) { state.me = null; showLogin(); return; }
       state.me = me;
       document.getElementById("topbar").hidden = false;
+      document.querySelectorAll(".nav a[data-ic]").forEach(function (a) {
+        if (!a.querySelector(".ic")) a.insertAdjacentHTML("afterbegin", ic(a.dataset.ic));
+      });
       renderAccount();
       return api("/app/api/models").then(function (m) { state.models = m; }).catch(function () {}).then(route);
     });
