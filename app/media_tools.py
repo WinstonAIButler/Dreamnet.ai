@@ -97,10 +97,11 @@ def variation_prompt(original: str, changes: str) -> str:
 
 
 async def remix_online(client: httpx.AsyncClient, image_path: str, prompt: str, width: int, height: int) -> bytes:
-    url = REMIX_SERVICE.format(prompt=quote(prompt[:1500], safe=""), image=quote(signed_link(image_path), safe=""),
+    import app.portraits as portraits
+    url = REMIX_SERVICE.format(prompt=quote(portraits.online_prompt(prompt)[:1500], safe=""), image=quote(signed_link(image_path), safe=""),
                                width=width, height=height, seed=random.randint(1, 2**31 - 1))
     try:
-        r = await client.get(url, timeout=REMIX_TIMEOUT, follow_redirects=True)
+        r = await portraits.online_get(client, url, REMIX_TIMEOUT)
     except Exception as e:
         raise MediaError(f"The image editing service didn't answer ({type(e).__name__}).") from e
     if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/") or len(r.content) < 2000:

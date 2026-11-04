@@ -1833,11 +1833,35 @@ async def option_image(set: str, key: str, g: str = "", s: dict = Depends(_sessi
     if mentions_minor(key, strict=True):
         return _err(400, "Pictures must show adults only.")
     try:
-        png = await option_images.get(api_routes.http_client, set, key, g if g in ("male", "female", "trans woman", "trans man", "non-binary") else "")
+        png, src = await option_images.get(api_routes.http_client, set, key, g if g in ("male", "female", "trans woman", "trans man", "non-binary") else "")
     except option_images.OptionImageError as e:
         return _err(503, str(e))
     kind = "image/jpeg" if png[:3] == b"\xff\xd8\xff" else "image/webp" if png[8:12] == b"WEBP" else "image/png"
-    return Response(png, media_type=kind, headers={"Cache-Control": "private, max-age=2592000"})
+    # A GPU photo is final; an online one may be replaced by a GPU photo later, so the browser rechecks it daily.
+    age = 2592000 if src == "gpu" or not gpu.configured() else 86400
+    return Response(png, media_type=kind, headers={"Cache-Control": f"private, max-age={age}", "X-Photo-Source": src})
+
+
+@router.get("/option-images/bake")
+async def option_bake_status(s: dict = Depends(_session)):
+    return JSONResponse({**option_images.bake_state, "gpu": gpu.configured()})
+
+
+@router.post("/option-images/bake")
+async def option_bake(request: Request, s: dict = Depends(_session)):
+    """Make realistic photos for every choice tile on the GPU, in the background."""
+    if not gpu.configured():
+        return _err(503, "Set up the cloud GPU first (see docs/cloud-gpu.md).")
+    if option_images.bake_state["running"]:
+        return JSONResponse(option_images.bake_state)
+    items = [it for it in ((await request.json()).get("items") or [])
+             if isinstance(it, list) and not mentions_minor(" ".join(map(str, it)), strict=True)][:5000]
+    plan = option_images.bake_plan(items)
+    if not plan:
+        return _err(400, "Nothing to make.")
+    asyncio.create_task(option_images.bake(api_routes.http_client, items))
+    await asyncio.sleep(0)
+    return JSONResponse(option_images.bake_state)
 
 
 async def _opening(s: dict, c: dict, storyline_id: int, location: str, situation: str, start: datetime) -> str:

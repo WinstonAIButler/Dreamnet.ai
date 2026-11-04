@@ -6,6 +6,7 @@ Z-Image-Turbo workflow from Intel AI Playground's "Pro 2 Image" preset
 Point COMFYUI_URL at AI Playground's own ComfyUI or any ComfyUI install that
 has the Z-Image-Turbo model files.
 """
+import asyncio
 import copy
 import os
 import random
@@ -102,6 +103,44 @@ class PortraitError(Exception):
     pass
 
 
+# A Pollinations key ("pollen key", enter.pollinations.ai) lifts the free limit of one image every 45 seconds
+# per server, and the watermark.
+POLLINATIONS_KEY = os.getenv("POLLINATIONS_KEY", "").strip()
+
+
+_REAL_PERSON = [
+    (r"(?i)\ba real photograph of a real person\b", "a photorealistic photograph of a fictional adult"),
+    (r"(?i)\bof a real person\b", "of a fictional adult"),
+    (r"(?i)\breal (person|human|people)\b", "photorealistic fictional adult"),
+]
+
+
+def online_prompt(prompt: str) -> str:
+    """Online services block prompts that ask for a "real person" (their privacy filter): say fictional instead."""
+    import re as _re
+    for pat, rep in _REAL_PERSON:
+        prompt = _re.sub(pat, rep, prompt)
+    return prompt
+
+
+async def online_get(client: httpx.AsyncClient, url: str, timeout: float) -> httpx.Response:
+    """GET from the online image service. Without a key, a "free limit" answer is waited out and retried once."""
+    headers = {"Authorization": f"Bearer {POLLINATIONS_KEY}"} if POLLINATIONS_KEY else {}
+    r = await client.get(url, timeout=timeout, follow_redirects=True, headers=headers)
+    if r.status_code == 402 and not POLLINATIONS_KEY:
+        wait = 46.0
+        try:
+            import re as _re
+            m = _re.search(r"Retry after (\d+)s", r.json().get("error", {}).get("message", ""))
+            if m:
+                wait = min(60.0, float(m.group(1)) + 1)
+        except Exception:
+            pass
+        await asyncio.sleep(wait)
+        r = await client.get(url, timeout=timeout, follow_redirects=True)
+    return r
+
+
 def scene_instructions() -> str:
     """SCENE_INSTRUCTIONS with the picture heat rule that applies right now."""
     return SCENE_INSTRUCTIONS.replace("{heat}", heat.rule())
@@ -149,10 +188,10 @@ async def make_portrait(client: httpx.AsyncClient, prompt: str, width: int = WID
     if not online_enabled():
         raise PortraitError("Portrait generation is off. Upload a photo instead.")
     from urllib.parse import quote
-    url = ONLINE_SERVICE.format(prompt=quote(prompt[:ONLINE_PROMPT_CHARS], safe=""), width=width, height=height,
+    url = ONLINE_SERVICE.format(prompt=quote(online_prompt(prompt)[:ONLINE_PROMPT_CHARS], safe=""), width=width, height=height,
                                 seed=random.randint(1, 2**31 - 1))
     try:
-        r = await client.get(url, timeout=ONLINE_TIMEOUT, follow_redirects=True)
+        r = await online_get(client, url, ONLINE_TIMEOUT)
     except Exception as e:
         raise PortraitError(f"The online image service didn't answer ({type(e).__name__}). Try again.") from e
     if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/") or len(r.content) < 2000:

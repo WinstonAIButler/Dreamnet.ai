@@ -810,12 +810,31 @@
   // browser keeps connections free; without ComfyUI the tiles just show their names.
   var tilePhotos = {}, photosOff = false;
   function photoUrl(set, key, g) {
-    return "/app/api/option-image?set=" + encodeURIComponent(set) + "&key=" + encodeURIComponent(key) + (g ? "&g=" + encodeURIComponent(g) : "");
+    // v=2: new address so browsers drop the old online photos they kept for 30 days
+    return "/app/api/option-image?set=" + encodeURIComponent(set) + "&key=" + encodeURIComponent(key) + (g ? "&g=" + encodeURIComponent(g) : "") + "&v=2";
   }
   function photoSpan(set, key, g) {
     var url = photoUrl(set, key, g), have = tilePhotos[url];
     if (photosOff && !have) return "";
     return '<span class="ph' + (have ? " ready" : "") + '" data-photo="' + esc(url) + '"' + (have ? ' style="background-image:url(' + have + ')"' : "") + "></span>";
+  }
+  // Every creator tile for every gender, plus the starting places: what "Make realistic trait photos" bakes.
+  function allTileItems(placeList) {
+    var genders = ["female", "male", "trans woman", "trans man", "non-binary"], out = [];
+    wizardSteps().forEach(function (st) {
+      [st, st.extra].forEach(function (s) {
+        if (!s || !s.items) return;
+        s.items.forEach(function (it) {
+          if (s.key === "gender") out.push([s.key, it.v, ""]);
+          else genders.forEach(function (g) { out.push([s.key, it.v, g]); });
+        });
+      });
+      [st.swatch, st.swatch2].forEach(function (sw) {
+        if (sw && SWATCH[sw.key]) SWATCH[sw.key].forEach(function (x) { genders.forEach(function (g) { out.push([sw.key, x[0], g]); }); });
+      });
+    });
+    (placeList || []).forEach(function (pl) { out.push(["place", pl, ""]); });
+    return out;
   }
   var photoQueue = Promise.resolve();
   function loadPhotos(root) {
@@ -1399,6 +1418,8 @@
           return '<button type="button" class="chip' + (opt.heat === h.key ? " on" : "") + '" data-heat="' + h.key + '">' + esc(h.label) + "</button>";
         }).join("") + "</div></div>" +
         (opt.heat_applies ? "" : '<div class="hint">Sensual and Explicit apply only when pictures are made on your own GPU. Until then every picture stays tasteful.</div>') +
+        (opt.gpu.configured ? '<div class="row"><span class="wiz-sub">Trait photos</span><span class="hint" id="bakeState">Realistic photos for every choice in the character creator, made once on your GPU.</span>' +
+          '<button type="button" class="btn small" id="bakeBtn">Make realistic trait photos</button></div>' : "") +
         (opt.gpu.runpod ? '<div class="row"><span class="wiz-sub">Cloud GPU</span><span class="hint" id="gpuState">Checking…</span>' +
           '<button type="button" class="btn small" id="gpuBtn" disabled>…</button></div>' : "") +
         "</div>" +
@@ -1435,6 +1456,30 @@
           }).catch(function (e) { toast(e.message, true); });
         };
       });
+      if (opt.gpu.configured) {
+        var bakeBtn = document.getElementById("bakeBtn"), bakeState = document.getElementById("bakeState"), bakeTimer = null;
+        var showBake = function (b) {
+          if (!document.getElementById("bakeBtn")) { clearInterval(bakeTimer); return; }
+          if (b.running) {
+            bakeBtn.disabled = true;
+            bakeState.textContent = "Making photos: " + b.done + " of " + b.total + (b.failed ? " (" + b.failed + " failed)" : "") + ". You can leave this page.";
+            if (!bakeTimer) bakeTimer = setInterval(function () { api("/app/api/option-images/bake").then(showBake); }, 5000);
+          } else {
+            bakeBtn.disabled = false;
+            if (bakeTimer) { clearInterval(bakeTimer); bakeTimer = null; }
+            if (b.finished_at) bakeState.textContent = (b.problem ? b.problem + " " : "") + "Made " + b.made + " new photos" +
+              (b.total - b.made - b.failed > 0 ? ", " + (b.total - b.made - b.failed) + " were already done" : "") + ".";
+          }
+        };
+        bakeBtn.onclick = function () {
+          bakeBtn.disabled = true; bakeState.textContent = "Getting the list…";
+          api("/app/api/places").then(function (r) {
+            var pl = []; r.groups.forEach(function (g) { g.places.forEach(function (p) { pl.push(p.place); }); });
+            return api("/app/api/option-images/bake", { method: "POST", body: { items: allTileItems(pl) } });
+          }).then(showBake).catch(function (e) { toast(e.message, true); bakeBtn.disabled = false; bakeState.textContent = ""; });
+        };
+        api("/app/api/option-images/bake").then(showBake).catch(function () {});
+      }
       if (opt.gpu.runpod) {
         var gpuBtn = document.getElementById("gpuBtn"), gpuState = document.getElementById("gpuState"), gpuTimer = null;
         var showGpu = function (g) {
