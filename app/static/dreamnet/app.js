@@ -510,6 +510,8 @@
   var ICONS = {
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    compass: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+    userplus: '<circle cx="10" cy="8" r="4"/><path d="M3 20a7 7 0 0 1 14 0M19 8v6M16 11h6"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     chatplus: '<path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/>',
     search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
@@ -601,10 +603,25 @@
       '<div class="menu"><button class="btn small ghost" id="menuBtn">' + esc(state.me.username) + " ▾</button>" +
       '<div class="menu-list" id="menuList" hidden>' +
       (state.me.is_admin ? '<a href="/admin">Models &amp; usage</a>' : "") +
+      '<div class="theme-row"><button type="button" data-theme="midnight">Midnight</button><button type="button" data-theme="dusk">Dusk</button></div>' +
       '<button id="logoutBtn">Lock</button></div></div>';
     document.getElementById("menuBtn").onclick = function () {
       var l = document.getElementById("menuList"); l.hidden = !l.hidden;
     };
+    function markTheme() {
+      var cur = document.documentElement.getAttribute("data-theme") || "midnight";
+      el.querySelectorAll("[data-theme]").forEach(function (b) { b.classList.toggle("on", b.dataset.theme === cur); });
+    }
+    el.querySelectorAll("[data-theme]").forEach(function (b) {
+      b.onclick = function () {
+        document.documentElement.setAttribute("data-theme", b.dataset.theme);
+        try { localStorage.setItem("dn-theme", b.dataset.theme); } catch (e) {}
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", b.dataset.theme === "dusk" ? "#03122F" : "#0a0a0d");
+        markTheme();
+      };
+    });
+    markTheme();
     document.getElementById("logoutBtn").onclick = function () {
       fetch("/api/logout", { method: "POST", credentials: "same-origin" }).then(showLogin);
     };
@@ -1337,7 +1354,7 @@
               .catch(function (e) { toast(e.message, true); });
           } else if (act === "remix" || act === "video") {
             if (act === "video" && !state.videoOn) {
-              toast("Videos need a Replicate account. Add REPLICATE_API_TOKEN in Render's environment settings, then redeploy.", true);
+              toast("Videos need a cloud GPU or a Replicate account. See docs/cloud-gpu.md in the Dreamnet code.", true);
               return;
             }
             openRemix(im, act, onNew);
@@ -1372,6 +1389,14 @@
       view.innerHTML =
         '<div class="section-head"><h2>Create image</h2><a class="btn small" href="#/gallery">Gallery</a></div>' +
         (opt.enabled ? "" : '<div class="rp-problem">Picture making is turned off on this server.</div>') +
+        '<div class="panel imgc-gpu"><div class="row"><span class="wiz-sub">Picture heat</span><div class="wiz-tiles chips" id="heatChips">' +
+        opt.heat_levels.map(function (h) {
+          return '<button type="button" class="chip' + (opt.heat === h.key ? " on" : "") + '" data-heat="' + h.key + '">' + esc(h.label) + "</button>";
+        }).join("") + "</div></div>" +
+        (opt.heat_applies ? "" : '<div class="hint">Sensual and Explicit apply only when pictures are made on your own GPU. Until then every picture stays tasteful.</div>') +
+        (opt.gpu.runpod ? '<div class="row"><span class="wiz-sub">Cloud GPU</span><span class="hint" id="gpuState">Checking…</span>' +
+          '<button type="button" class="btn small" id="gpuBtn" disabled>…</button></div>' : "") +
+        "</div>" +
         '<div class="imgc">' +
         '<div class="imgc-form">' +
         '<h3 class="wiz-sub">Character</h3><div class="imgc-chars">' + chars.map(function (c) {
@@ -1397,6 +1422,37 @@
         '<div class="gallery" id="imgOut"><div class="loading">Loading…</div></div></div>' +
         "</div>";
       loadPhotos(view);
+      view.querySelectorAll("[data-heat]").forEach(function (b) {
+        b.onclick = function () {
+          api("/app/api/picture-heat", { method: "PUT", body: { level: b.dataset.heat } }).then(function (r) {
+            view.querySelectorAll("[data-heat]").forEach(function (x) { x.classList.toggle("on", x.dataset.heat === r.heat); });
+            toast("Picture heat: " + b.textContent);
+          }).catch(function (e) { toast(e.message, true); });
+        };
+      });
+      if (opt.gpu.runpod) {
+        var gpuBtn = document.getElementById("gpuBtn"), gpuState = document.getElementById("gpuState"), gpuTimer = null;
+        var showGpu = function (g) {
+          if (!document.getElementById("gpuBtn")) { clearInterval(gpuTimer); return; }
+          var on = g.status === "RUNNING";
+          gpuState.textContent = g.problem ? g.problem
+            : on ? (g.ready ? "On and ready" : "Starting up…") + (g.cost_per_hr ? " · $" + (+g.cost_per_hr).toFixed(2) + "/hr" : "") +
+                   " · turns off after " + g.idle_minutes + " idle minutes"
+            : "Off (not billing)";
+          gpuBtn.textContent = on ? "Stop GPU" : "Start GPU";
+          gpuBtn.dataset.act = on ? "stop" : "start";
+          gpuBtn.disabled = !!g.problem;
+        };
+        var pollGpu = function () { api("/app/api/gpu").then(showGpu).catch(function (e) { gpuState.textContent = e.message; }); };
+        gpuBtn.onclick = function () {
+          gpuBtn.disabled = true;
+          gpuState.textContent = gpuBtn.dataset.act === "start" ? "Starting…" : "Stopping…";
+          api("/app/api/gpu/" + gpuBtn.dataset.act, { method: "POST" }).then(showGpu)
+            .catch(function (e) { toast(e.message, true); pollGpu(); });
+        };
+        pollGpu();
+        gpuTimer = setInterval(pollGpu, 15000);
+      }
       function showGallery() {
         var c = chars.filter(function (x) { return x.id === pick.character_id; })[0];
         document.getElementById("imgWho").textContent = c ? c.name : "";
@@ -2530,6 +2586,9 @@
       if (!me.authenticated) { state.me = null; showLogin(); return; }
       state.me = me;
       document.getElementById("topbar").hidden = false;
+      document.querySelectorAll(".nav a[data-ic]").forEach(function (a) {
+        if (!a.querySelector(".ic")) a.insertAdjacentHTML("afterbegin", ic(a.dataset.ic));
+      });
       renderAccount();
       return api("/app/api/models").then(function (m) { state.models = m; }).catch(function () {}).then(route);
     });

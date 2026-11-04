@@ -3,8 +3,10 @@ Dreamnet - make new pictures and videos from a gallery picture
 - Remix: a new picture that starts from an existing one (same person, new outfit, place or pose). Online,
   the picture is handed to an image-editing model by a short-lived signed link; without a public address
   (or if that model fails) it falls back to the picture's own prompt plus the changes, on a new seed.
-- Video: a short clip animated from a picture, through Replicate's image-to-video models. It needs
-  REPLICATE_API_TOKEN; without it the button explains what to set.
+- Video: a short clip animated from a picture: on your own ComfyUI or cloud GPU with Wan 2.2 (see
+  docs/cloud-gpu.md), or through Replicate's image-to-video models with REPLICATE_API_TOKEN.
+  VIDEO_BACKEND picks one: auto (the cloud GPU when set up, else Replicate, else your ComfyUI), comfyui
+  or replicate.
 Only the picture and its prompt are sent, never chats.
 """
 import asyncio
@@ -18,6 +20,9 @@ import time
 from urllib.parse import quote
 
 import httpx
+
+import app.gpu as gpu
+import app.heat as heat
 
 # Public address of this site, so an online model can fetch a picture through a signed link.
 # Render sets RENDER_EXTERNAL_URL itself.
@@ -34,8 +39,21 @@ REPLICATE_API = os.getenv("REPLICATE_API", "https://api.replicate.com/v1").rstri
 VIDEO_MODEL = os.getenv("VIDEO_MODEL", "wan-video/wan-2.2-i2v-fast")
 VIDEO_TIMEOUT = float(os.getenv("VIDEO_TIMEOUT", "600"))
 
-VIDEO_RULES = ("Realistic live-action footage, natural motion, real skin and light, cinematic, steady camera. "
-               "Every person is an adult. Tasteful, no explicit nudity. Not animation, not cartoon, not CGI.")
+VIDEO_BACKEND = os.getenv("VIDEO_BACKEND", "auto").strip().lower()
+
+# Wan 2.2 TI2V 5B on ComfyUI (the files from Comfy-Org/Wan_2.2_ComfyUI_Repackaged).
+WAN_UNET = os.getenv("WAN_UNET", "wan2.2_ti2v_5B_fp16.safetensors")
+WAN_CLIP = os.getenv("WAN_CLIP", "umt5_xxl_fp8_e4m3fn_scaled.safetensors")
+WAN_VAE = os.getenv("WAN_VAE", "wan2.2_vae.safetensors")
+VIDEO_FRAMES = int(os.getenv("VIDEO_FRAMES", "121"))   # 121 frames at 24 fps = about 5 seconds
+VIDEO_STEPS = int(os.getenv("VIDEO_STEPS", "20"))
+WAN_NEGATIVE = ("blurry, low quality, distorted face, deformed hands, extra limbs, flicker, static frame, "
+                "cartoon, anime, CGI, illustration, watermark, text, subtitles")
+# The 5B model is trained at 1280x704; each shape keeps about that many pixels.
+VIDEO_SIZES = {"portrait": (704, 1280), "square": (960, 960), "landscape": (1280, 704), "wide": (1280, 704)}
+
+VIDEO_LOOK = "Realistic live-action footage, natural motion, real skin and light, cinematic, steady camera."
+VIDEO_STYLE = "Not animation, not cartoon, not CGI."
 
 
 class MediaError(Exception):
@@ -70,7 +88,7 @@ def remix_prompt(original: str, changes: str) -> str:
     """What the editing model is told: keep the person, apply the changes, stay a realistic photo."""
     return (f"Keep exactly the same person: same face, hair, eyes, skin and body. {changes.strip().rstrip('.')}. "
             "An adult. Photorealistic photograph, natural skin texture, real light, cinematic colour grade. "
-            "Not a drawing, not anime, not CGI. No explicit nudity.")
+            "Not a drawing, not anime, not CGI. " + heat.rule(online=True))
 
 
 def variation_prompt(original: str, changes: str) -> str:
@@ -92,8 +110,49 @@ async def remix_online(client: httpx.AsyncClient, image_path: str, prompt: str, 
 
 # --- video ---
 
+def video_backend() -> str:
+    """"comfyui", "replicate" or "" (videos off)."""
+    if VIDEO_BACKEND == "comfyui":
+        return "comfyui" if gpu.configured() else ""
+    if VIDEO_BACKEND == "replicate":
+        return "replicate" if REPLICATE_TOKEN else ""
+    if gpu.runpod_enabled():
+        return "comfyui"
+    if REPLICATE_TOKEN:
+        return "replicate"
+    return "comfyui" if gpu.configured() else ""
+
+
 def video_enabled() -> bool:
-    return bool(REPLICATE_TOKEN)
+    return bool(video_backend())
+
+
+def video_rules(backend: str) -> str:
+    return f"{VIDEO_LOOK} {heat.rule(online=backend != 'comfyui')} {VIDEO_STYLE}"
+
+
+def wan_workflow(image_name: str, prompt: str, shape: str, seed: int | None = None) -> dict:
+    w, h = VIDEO_SIZES.get(shape, VIDEO_SIZES["portrait"])
+    return {
+        "37": {"class_type": "UNETLoader", "inputs": {"unet_name": WAN_UNET, "weight_dtype": "default"}},
+        "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": WAN_CLIP, "type": "wan", "device": "default"}},
+        "39": {"class_type": "VAELoader", "inputs": {"vae_name": WAN_VAE}},
+        "48": {"class_type": "ModelSamplingSD3", "inputs": {"shift": 8, "model": ["37", 0]}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["38", 0]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": WAN_NEGATIVE, "clip": ["38", 0]}},
+        "56": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "55": {"class_type": "Wan22ImageToVideoLatent",
+               "inputs": {"vae": ["39", 0], "start_image": ["56", 0], "width": w, "height": h,
+                          "length": VIDEO_FRAMES, "batch_size": 1}},
+        "3": {"class_type": "KSampler",
+              "inputs": {"seed": seed if seed is not None else random.randint(0, 2**48), "steps": VIDEO_STEPS,
+                         "cfg": 5, "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1,
+                         "model": ["48", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["55", 0]}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+        "57": {"class_type": "CreateVideo", "inputs": {"images": ["8", 0], "fps": 24}},
+        "58": {"class_type": "SaveVideo",
+               "inputs": {"video": ["57", 0], "filename_prefix": "dreamnet/video", "format": "mp4", "codec": "h264"}},
+    }
 
 
 def _data_uri(data: bytes) -> str:
@@ -101,12 +160,27 @@ def _data_uri(data: bytes) -> str:
     return f"data:{kind};base64," + base64.b64encode(data).decode()
 
 
-async def make_video(client: httpx.AsyncClient, image: bytes, motion: str) -> bytes:
+async def make_video(client: httpx.AsyncClient, image: bytes, motion: str, shape: str = "portrait") -> bytes:
+    """Animate one picture into a short MP4 and return its bytes."""
+    backend = video_backend()
+    if not backend:
+        raise MediaError("Videos need a cloud GPU (see docs/cloud-gpu.md) or a Replicate account "
+                         "(REPLICATE_API_TOKEN).")
+    prompt = f"{motion.strip().rstrip('.')}. {video_rules(backend)}"
+    if backend == "comfyui":
+        try:
+            name = await gpu.upload_image(client, image)
+            return await gpu.run_workflow(client, wan_workflow(name, prompt, shape), VIDEO_TIMEOUT,
+                                          what="video", want=(".mp4", ".webm"))
+        except gpu.GPUError as e:
+            raise MediaError(str(e)) from e
+    return await _replicate_video(client, image, prompt)
+
+
+async def _replicate_video(client: httpx.AsyncClient, image: bytes, prompt: str) -> bytes:
     """Animate one picture into a short MP4 on Replicate and return its bytes."""
-    if not video_enabled():
-        raise MediaError("Videos need a Replicate account: set REPLICATE_API_TOKEN on the server (see README).")
     headers = {"Authorization": f"Bearer {REPLICATE_TOKEN}", "Prefer": "wait=60"}
-    body = {"input": {"image": _data_uri(image), "prompt": f"{motion.strip().rstrip('.')}. {VIDEO_RULES}"}}
+    body = {"input": {"image": _data_uri(image), "prompt": prompt}}
     try:
         r = await client.post(f"{REPLICATE_API}/models/{VIDEO_MODEL}/predictions", json=body, headers=headers, timeout=90)
     except Exception as e:
