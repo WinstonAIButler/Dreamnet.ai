@@ -79,13 +79,16 @@
     for (var i = 0; i < n; i++) { var x = i * 2 / n - 1; curve[i] = (1 + amount) * x / (1 + amount * Math.abs(x)); }
     ws.curve = curve; return ws;
   }
+  // Kept light on purpose: long or heavy reverb sounds like an echo. "clear" has no effect at all.
   var SOUND_FX = {  // [filters, grit, reverb seconds, reverb mix]
-    innocent: function (ctx) { return [[filter(ctx, "highshelf", 3500, 4)], 0, 0.8, 0.08]; },
-    mysterious: function (ctx) { return [[filter(ctx, "lowpass", 6000)], 0, 2.6, 0.35]; },
-    villain: function (ctx) { return [[filter(ctx, "lowshelf", 220, 6), ctx.createDynamicsCompressor()], 3, 1.2, 0.15]; },
-    possessed: function (ctx) { return [[filter(ctx, "lowshelf", 160, 8), filter(ctx, "lowpass", 5000)], 10, 3.2, 0.45]; }
+    innocent: function (ctx) { return [[filter(ctx, "highshelf", 3500, 4)], 0, 0.4, 0.04]; },
+    mysterious: function (ctx) { return [[filter(ctx, "lowpass", 6000)], 0, 0.9, 0.10]; },
+    villain: function (ctx) { return [[filter(ctx, "lowshelf", 220, 6), ctx.createDynamicsCompressor()], 3, 0.6, 0.06]; },
+    possessed: function (ctx) { return [[filter(ctx, "lowshelf", 160, 8), filter(ctx, "lowpass", 5000)], 10, 1.2, 0.15]; }
   };
+  var inCall = false;  // no effects on calls: cleaner, and the microphone doesn't pick up a tail
   function playAudio(blob, sound) {
+    if (inCall || pref("voiceFx", "1") === "0") sound = "";
     var url = URL.createObjectURL(blob), a = new Audio(url), ctx = SOUND_FX[sound] ? audioCtx() : null;
     if (!ctx) return a;
     try {
@@ -100,11 +103,13 @@
       if (sound === "possessed") {  // a second, slower and deeper copy of the voice dragging under the first
         var b = new Audio(url);
         b.preservesPitch = b.mozPreservesPitch = b.webkitPreservesPitch = false;
-        b.playbackRate = 0.9;
-        var g2 = ctx.createGain(); g2.gain.value = 0.55;
+        b.playbackRate = 0.97;
+        var g2 = ctx.createGain(); g2.gain.value = 0.22;
         ctx.createMediaElementSource(b).connect(g2); g2.connect(verb); g2.connect(dry);
         a.echo = b;
         a.addEventListener("play", function () { b.play().catch(function () {}); });
+        a.addEventListener("pause", function () { b.pause(); });
+        a.addEventListener("ended", function () { b.pause(); });
       }
     } catch (e) { /* no effects on this browser; the plain voice still plays */ }
     return a;
@@ -257,7 +262,7 @@
       function opts(list, cur) { return list.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === cur ? " selected" : "") + ">" + esc(x[1]) + "</option>"; }).join(""); }
       form.vp_accent.innerHTML = opts(pre.accents, st.accent || "irish");
       form.vp_age.innerHTML = opts(pre.ages, st.age || (+form.age.value <= 25 ? "young" : +form.age.value <= 35 ? "middle" : +form.age.value <= 60 || +form.age.value > 100 ? "older" : "elder"));
-      form.vp_sound.innerHTML = opts(pre.sounds, st.sound || "mysterious");
+      form.vp_sound.innerHTML = opts(pre.sounds, st.sound || "clear");
       form.vp_gender.value = st.gender || voiceGender(form.gender.value);
       function showKind() {
         var preset = form.voice_kind.value === "preset";
@@ -882,7 +887,7 @@
   }
   function viewGuidedCreate() {
     setNav("create");
-    var all = wizardSteps(), steps = all, at = 0, picks = { age: 25, sound: "mysterious", accent: "" };
+    var all = wizardSteps(), steps = all, at = 0, picks = { age: 25, sound: "clear", accent: "" };
     function chosen(key) { var v = picks[key]; return Array.isArray(v) ? v : v ? [v] : []; }
     function tiles(st) {
       return '<div class="wiz-tiles">' + st.items.map(function (it) {
@@ -914,7 +919,7 @@
           '<label class="wiz-custom">Tags <span class="hint">comma-separated, used on Explore</span><input data-story="extra_tags" maxlength="200" value="' + esc(picks.extra_tags || "") + '" placeholder="slow burn, enemies to lovers"></label>';
       } else if (st.form) {
         var acc = [["", "Pick later"], ["irish", "Irish"], ["french", "French"], ["german", "German"], ["nordic", "Nordic"], ["italian", "Italian"], ["russian", "Russian"]];
-        var snd = [["innocent", "Innocent"], ["mysterious", "Mysterious"], ["villain", "Villain"], ["possessed", "Possessed"]];
+        var snd = [["clear", "Clear"], ["innocent", "Innocent"], ["mysterious", "Mysterious"], ["villain", "Villain"], ["possessed", "Possessed"]];
         body = '<div class="wiz-name"><label>Character name<div class="row"><input id="wName" maxlength="60" value="' + esc(picks.name || "") + '" placeholder="Name">' +
           '<button type="button" class="btn small ghost" id="wRandom" title="Random name">Random</button></div></label>' +
           '<label>Age <span class="hint">18 or older</span><div class="wiz-age"><button type="button" class="btn small ghost" data-age="-1">‹</button>' +
@@ -1656,6 +1661,7 @@
         '<div class="memory-panel" id="memPanel" hidden></div>' +
         '<div class="voice-panel" id="voicePanel" hidden>' +
         '<label class="check-line"><input type="checkbox" id="autoRead"> Read ' + esc(c.name) + "'s replies aloud as they arrive</label>" +
+        '<label class="check-line"><input type="checkbox" id="voiceFx"> Voice effects (reverb and the like; off is clearest)</label>' +
         '<label>Read<select id="readMode"><option value="all">everything (words, actions, thoughts)</option>' +
         '<option value="words_thoughts">spoken words and thoughts</option><option value="words">spoken words only</option></select></label>' +
         '<a class="btn small ghost" href="#/character/' + c.id + '">Change ' + esc(c.name) + "'s voice</a></div>" +
@@ -1959,7 +1965,7 @@
           if (text && state.me.portrait_gen && list[last] && list[last].role === "assistant" && !list[last].image && wantsPhoto(text))
             makePicture(list[last]);
           if (list[last] && list[last].role === "assistant" && (calling || pref("autoRead", "0") === "1"))
-            playVoice(last, function () { if (calling) listen(true); });
+            playVoice(last, function () { if (calling) setTimeout(function () { if (calling && !rec) listen(true); }, 600); });
         }).catch(function (e) {
           if (e.name === "AbortError") return;
           if (opts.cont) { target.typing = false; target.content = base.replace(/\s+$/, ""); } else list.pop();
@@ -2042,7 +2048,7 @@
         try { r.start(); } catch (err) { rec = null; }
       }
       function endCall() {
-        calling = false; callBtn.classList.remove("on"); callBtn.title = "Call " + c.name + ": talk out loud, hear the replies";
+        calling = false; inCall = false; callBtn.classList.remove("on"); callBtn.title = "Call " + c.name + ": talk out loud, hear the replies";
         if (rec) { rec.abort(); rec = null; }
       }
       if (micBtn) micBtn.onclick = function () { if (rec) { rec.stop(); } else listen(false); };
@@ -2055,7 +2061,7 @@
           toast(on ? "This browser can't listen, so type as usual: " + c.name + "'s replies will be read aloud." : "Replies won't be read aloud.");
           return;
         }
-        calling = true; callBtn.classList.add("on"); callBtn.title = "End the call";
+        calling = true; inCall = true; callBtn.classList.add("on"); callBtn.title = "End the call";
         toast("On a call with " + c.name + ". Talk, then pause; they answer out loud.");
         listen(true);
       };
@@ -2164,6 +2170,9 @@
         if (!autoRead.checked) stopSpeaking();
       };
       readMode.onchange = function () { setPref("readMode", readMode.value); };
+      var voiceFx = document.getElementById("voiceFx");
+      voiceFx.checked = pref("voiceFx", "1") === "1";
+      voiceFx.onchange = function () { setPref("voiceFx", voiceFx.checked ? "1" : "0"); };
       var clockPanel = document.getElementById("clockPanel");
       var sceneRules = (conv.time_rules || []).slice();
       function drawSceneRules() {

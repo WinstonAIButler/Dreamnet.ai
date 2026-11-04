@@ -166,6 +166,7 @@ AGES = {  # key: (label, index into the voice lists, pitch Hz, speed %, VoiceStu
     "elder": ("Elder (61-80)", 3, -10, -12, "elderly"),
 }
 SOUNDS = {  # key: (label, pitch Hz, speed %, VoiceStudio pitch tag)
+    "clear": ("Clear (no effect)", 0, 0, "moderate pitch"),
     "innocent": ("Innocent", 8, 3, "high pitch"),
     "mysterious": ("Mysterious", -6, -10, "low pitch"),
     "villain": ("Villain", -12, -6, "low pitch"),
@@ -186,7 +187,7 @@ def clean_style(raw) -> dict:
         return {}
     return {"accent": raw["accent"], "age": raw.get("age") if raw.get("age") in AGES else "middle",
             "gender": raw.get("gender") if raw.get("gender") in ("male", "female") else "female",
-            "sound": raw.get("sound") if raw.get("sound") in SOUNDS else "mysterious"}
+            "sound": raw.get("sound") if raw.get("sound") in SOUNDS else "clear"}
 
 
 def preset(style: dict, rate: int = 0) -> dict:
