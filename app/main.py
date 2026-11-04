@@ -37,7 +37,17 @@ from app.jarvis import router as jarvis_router
 
 # Config
 FEATHERLESS_API_BASE = os.getenv("FEATHERLESS_API_BASE", "https://api.featherless.ai/v1")
-FEATHERLESS_API_KEY = os.getenv("FEATHERLESS_API_KEY", "")
+
+
+def _clean_key(raw: str) -> str:
+    """The key as pasted into Render can carry spaces, a line break, quotes or a "Bearer " prefix: drop them."""
+    k = (raw or "").strip().strip('"').strip("'").strip()
+    if k.lower().startswith("bearer "):
+        k = k[7:].strip()
+    return k
+
+
+FEATHERLESS_API_KEY = _clean_key(os.getenv("FEATHERLESS_API_KEY", ""))
 MAX_CONCURRENT_CONNECTIONS = int(os.getenv("MAX_CONCURRENT_CONNECTIONS", "16"))
 CACHE_TTL = int(os.getenv("CACHE_TTL", "60"))
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -200,6 +210,44 @@ async def check_session(request: Request):
 # --- Pages ---
 
 DREAMNET_DIR = BASE_DIR / "static" / "dreamnet"
+
+
+_ai_status_cache: dict = {"at": 0.0, "data": None}
+
+
+@app.get("/api/ai-status")
+async def ai_status():
+    """Is the AI connected? Says whether the Featherless key is set and accepted, never the key itself.
+    One tiny test request at most every 5 minutes."""
+    import time as _time
+    from app.studio import DEFAULT_MODEL
+    now = _time.time()
+    if _ai_status_cache["data"] and now - _ai_status_cache["at"] < 300:
+        return _ai_status_cache["data"]
+    out = {"key_set": bool(FEATHERLESS_API_KEY), "featherless": "no key", "status": None,
+           "model": DEFAULT_MODEL, "detail": ""}
+    if FEATHERLESS_API_KEY:
+        try:
+            r = await http_client.post(f"{FEATHERLESS_API_BASE}/chat/completions",
+                                       headers={"Authorization": f"Bearer {FEATHERLESS_API_KEY}"},
+                                       json={"model": DEFAULT_MODEL, "max_tokens": 1,
+                                             "messages": [{"role": "user", "content": "hi"}]}, timeout=60)
+            out["status"] = r.status_code
+            if r.status_code == 200:
+                out["featherless"] = "ok"
+            else:
+                out["featherless"] = {401: "key rejected", 403: "not allowed on this plan",
+                                      404: "model not found", 429: "busy (plan limit)"}.get(r.status_code, "error")
+                try:
+                    err = r.json().get("error") or {}
+                    out["detail"] = str(err.get("message") or err)[:200] if isinstance(err, dict) else str(err)[:200]
+                except Exception:
+                    out["detail"] = r.text[:200]
+        except Exception as e:
+            out["featherless"] = "unreachable"
+            out["detail"] = type(e).__name__
+    _ai_status_cache.update(at=now, data=out)
+    return out
 
 
 @app.get("/", response_class=HTMLResponse)
