@@ -1640,6 +1640,10 @@
         (conv.novel ? " · scene for <a href=\"#/novel/" + conv.novel.id + "\">" + esc(conv.novel.title) + "</a>" : "") + "</p></div></div>" +
         '<button class="btn small clock" id="clockBtn" title="In-story time. Set the clock or skip ahead.">' + ic("clock") + ' <span id="clockNow"></span></button>' +
         '<span class="grow"></span>' +
+        '<select class="model-pick heat-pick" id="heatPick" title="How far intimate scenes go in this chat">' +
+          (conv.heat_levels || []).map(function (h) {
+            return '<option value="' + esc(h.key) + '"' + (conv.heat === h.key ? " selected" : "") + ">" + esc(h.label) + "</option>"; }).join("") +
+        "</select>" +
         (state.models.length > 1 ? '<select class="model-pick" id="modelPick" title="Which AI writes the replies">' +
           '<option value="">' + esc(modelLabel(state.me.default_model)) + " (default)</option>" +
           state.models.filter(function (m) { return m.model_id !== state.me.default_model; }).map(function (m) {
@@ -2132,6 +2136,16 @@
       };
       var voicePanel = document.getElementById("voicePanel");
       document.getElementById("voiceBtn").onclick = function () { voicePanel.hidden = !voicePanel.hidden; };
+      var heatPick = document.getElementById("heatPick");
+      var heatSays = { sweet: "Sweet: intimate scenes fade to black.", steamy: "Steamy: sensual, not graphic.",
+                       explicit: "Explicit: uncensored, nothing faded out." };
+      heatPick.onchange = function () {
+        var was = conv.heat;
+        api("/app/api/conversations/" + convId + "/heat", { method: "PUT", body: { heat: heatPick.value } }).then(function () {
+          conv.heat = heatPick.value;
+          toast(heatSays[heatPick.value] || "Saved.");
+        }).catch(function (e) { heatPick.value = was; toast(e.message); });
+      };
       var modelPick = document.getElementById("modelPick");
       if (modelPick) {
         if (modelPick.value !== pref("rpModel", "")) setPref("rpModel", modelPick.value);  // a removed model falls back to the default

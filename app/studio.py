@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
 import app.gpu as gpu
-import app.heat as heat
+import app.heat as picture_heat
 import app.image_studio as image_studio
 import app.media_tools as media_tools
 import app.option_images as option_images
@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     time_rules TEXT NOT NULL DEFAULT '',        -- JSON list of extra or overriding actions for this scene
     location TEXT NOT NULL DEFAULT '',          -- where the scene starts
     situation TEXT NOT NULL DEFAULT '',         -- the scenario: what's going on as it starts (optional)
+    heat TEXT NOT NULL DEFAULT 'explicit',      -- sweet | steamy | explicit: how far intimate scenes go
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -193,6 +194,29 @@ SEED_MODELS = [
     ("Sao10K/L3-8B-Stheno-v3.2", "Stheno 8B (roleplay)", 1, 0.20, 0.05, 0.40),
     ("MarinaraSpaghetti/NemoMix-Unleashed-12B", "NemoMix Unleashed 12B (prose)", 1, 0.30, 0.08, 0.60),
 ]
+
+# Uncensored roleplay models on Featherless, added once to every install (an admin can remove any of them).
+# The 24B and bigger ones need a Featherless plan that includes models that size.
+UNCENSORED_MODELS = [
+    ("Sao10K/L3-8B-Lunaris-v1", "Lunaris 8B (uncensored roleplay)", 1, 0.20, 0.05, 0.40),
+    ("TheDrummer/Rocinante-12B-v1.1", "Rocinante 12B (uncensored roleplay)", 1, 0.30, 0.08, 0.60),
+    ("nothingiisreal/MN-12B-Celeste-V1.9", "Celeste 12B (uncensored roleplay)", 1, 0.30, 0.08, 0.60),
+    ("TheDrummer/Cydonia-24B-v2", "Cydonia 24B (uncensored, bigger plan)", 2, 0.60, 0.15, 1.20),
+    ("Sao10K/L3.3-70B-Euryale-v2.3", "Euryale 70B (uncensored, bigger plan)", 4, 1.20, 0.30, 2.40),
+    ("anthracite-org/magnum-v4-72b", "Magnum 72B (uncensored, bigger plan)", 4, 1.20, 0.30, 2.40),
+]
+
+# How far intimate scenes go in a chat. Every level keeps the hard rules (adults only, no real people).
+HEAT_LEVELS = {
+    "sweet": ("Sweet", "Keep romance and intimacy suggestive: flirting, tension and kisses are fine, but when a scene "
+              "turns sexual, fade to black and pick up afterwards."),
+    "steamy": ("Steamy", "Intimacy is sensual and heated: desire, kissing and touching are written vividly, and sex "
+               "scenes happen on the page, but stay sensual rather than graphic, without explicit anatomical detail."),
+    "explicit": ("Explicit", "This is an uncensored adult story. When the scene goes there, write sex scenes fully "
+                 "explicitly and in graphic detail, with no fade to black, no softening, no moralizing and no "
+                 "disclaimers. Don't refuse or steer away from explicit content between consenting adult characters."),
+}
+DEFAULT_HEAT = "explicit"
 
 SEED_CHARACTERS = [
     dict(name="Dante Moretti", voice="en-US-ChristopherNeural", voice_tone="deep", age=34, gender="male", color="#c8697a",
@@ -428,8 +452,8 @@ async def init_studio_db(db_path: str):
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA)
         row = await (await db.execute("SELECT value FROM studio_settings WHERE key = 'picture_heat'")).fetchone()
-        if row and row[0] in heat.LEVELS:
-            heat.set_level(row[0])
+        if row and row[0] in picture_heat.LEVELS:
+            picture_heat.set_level(row[0])
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(characters)")).fetchall()]
         if "portrait_prompt" not in cols:
             await db.execute("ALTER TABLE characters ADD COLUMN portrait_prompt TEXT NOT NULL DEFAULT ''")
@@ -468,6 +492,8 @@ async def init_studio_db(db_path: str):
         if "location" not in cols:
             await db.execute("ALTER TABLE conversations ADD COLUMN location TEXT NOT NULL DEFAULT ''")
             await db.execute("ALTER TABLE conversations ADD COLUMN situation TEXT NOT NULL DEFAULT ''")
+        if "heat" not in cols:
+            await db.execute("ALTER TABLE conversations ADD COLUMN heat TEXT NOT NULL DEFAULT 'explicit'")
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(memories)")).fetchall()]
         if "storyline_id" not in cols:
             await db.execute("ALTER TABLE memories ADD COLUMN storyline_id INTEGER")
@@ -506,6 +532,16 @@ async def init_studio_db(db_path: str):
     if not await list_models(db_path):
         for m in SEED_MODELS:
             await create_model(db_path, *m)
+    async with aiosqlite.connect(db_path) as db:
+        done = await (await db.execute("SELECT 1 FROM studio_settings WHERE key = 'uncensored_models'")).fetchone()
+        if not done:
+            have = {r[0] for r in await (await db.execute("SELECT model_id FROM models")).fetchall()}
+            for m in UNCENSORED_MODELS:
+                if m[0] not in have:
+                    await db.execute("INSERT INTO models (model_id, display_name, concurrent_cost, input_price, "
+                                     "cached_read_price, output_price, created_at) VALUES (?,?,?,?,?,?,?)", (*m, time.time()))
+            await db.execute("INSERT INTO studio_settings (key, value) VALUES ('uncensored_models', '1')")
+            await db.commit()
 
 
 # --- helpers ---
@@ -1079,8 +1115,8 @@ async def upload_portrait(request: Request, s: dict = Depends(_session)):
 async def image_options(s: dict = Depends(_session)):
     return JSONResponse({**image_studio.options(), "enabled": portraits.can_make_portraits(),
                          "video": media_tools.video_enabled(), "video_backend": media_tools.video_backend(),
-                         "heat": heat.chosen(), "heat_applies": gpu.own_gpu(),
-                         "heat_levels": [{"key": k, "label": heat.LABELS[k]} for k in heat.LEVELS],
+                         "heat": picture_heat.chosen(), "heat_applies": gpu.own_gpu(),
+                         "heat_levels": [{"key": k, "label": picture_heat.LABELS[k]} for k in picture_heat.LEVELS],
                          "gpu": {"configured": gpu.configured(), "runpod": gpu.runpod_enabled()}})
 
 
@@ -1089,12 +1125,12 @@ async def save_picture_heat(request: Request, s: dict = Depends(_session)):
     """How much pictures and videos may show: tasteful, sensual or explicit (own GPU only)."""
     level = str((await request.json()).get("level") or "")
     try:
-        heat.set_level(level)
+        picture_heat.set_level(level)
     except ValueError as e:
         return _err(400, str(e))
     await _exec("INSERT INTO studio_settings (key, value) VALUES ('picture_heat', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (level,))
-    return JSONResponse({"heat": heat.chosen(), "heat_applies": gpu.own_gpu()})
+    return JSONResponse({"heat": picture_heat.chosen(), "heat_applies": gpu.own_gpu()})
 
 
 @router.get("/gpu")
@@ -1466,7 +1502,7 @@ async def _scene_prompt(s: dict, m: dict) -> str:
     return (f"Cinematic photorealistic film still. {c['appearance']} {profiles.looks(profiles.clean(c.get('profile')))} "
             f"The moment: {plain} "
             + (f"Time of day: {_daypart(datetime.fromisoformat(m['story_at']))}. " if m["story_at"] else "")
-            + heat.rule() + " Natural skin texture, real light, 35mm lens, "
+            + picture_heat.rule() + " Natural skin texture, real light, 35mm lens, "
               "shallow depth of field. Not a drawing, not anime, not CGI.")
 
 
@@ -1844,7 +1880,21 @@ async def get_conversation(conv_id: int, s: dict = Depends(_session)):
                          "location": cv["location"] or "", "situation": cv["situation"] or "",
                          "start": await _story_start(cv),
                          "storyline": await _row("SELECT * FROM storylines WHERE id = ?", (cv["storyline_id"],)),
+                         "heat": cv["heat"] if cv["heat"] in HEAT_LEVELS else DEFAULT_HEAT,
+                         "heat_levels": [{"key": k, "label": v[0]} for k, v in HEAT_LEVELS.items()],
                          "time_rules": json.loads(cv["time_rules"]) if cv["time_rules"] else []})
+
+
+@router.put("/conversations/{conv_id}/heat")
+async def set_heat(conv_id: int, request: Request, s: dict = Depends(_session)):
+    body = await request.json()
+    heat = str(body.get("heat", ""))
+    if heat not in HEAT_LEVELS:
+        return _err(400, "Pick Sweet, Steamy or Explicit.")
+    if not await _row("SELECT id FROM conversations WHERE id = ?", (conv_id,)):
+        return _err(404, "Chat not found")
+    await _exec("UPDATE conversations SET heat = ? WHERE id = ?", (heat, conv_id))
+    return JSONResponse({"heat": heat})
 
 
 
@@ -2069,8 +2119,8 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         "Format every reply the same way: spoken words in \"double quotes\", actions and body language in "
         f"*asterisks*, and {c['name']}'s private inner thoughts in `backticks`, like: *He leans closer.* "
         "`She has no idea.` \"You should go.\" " + ANSWER_RULES.format(name=c["name"], user=s["username"])
-        + " " + LIFELIKE_RULES + " Dark themes, tension "
-        "and explicit adult content between consenting adult characters are allowed in this private story.\n\n"
+        + " " + LIFELIKE_RULES + " Dark themes and tension are allowed in this private story. "
+        + HEAT_LEVELS.get(cv["heat"], HEAT_LEVELS[DEFAULT_HEAT])[1] + "\n\n"
         f"Personality and background: {c['persona']}\nAppearance: {c['appearance']}\n"
     ) + profiles.for_prompt(profiles.clean(c["profile"]), c["name"], s["username"])
     if cv["novel_id"]:
@@ -2136,7 +2186,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         if _PHOTO_ASK.search(messages[-1]["content"].split("\n\n[Respond as")[0]):
             messages[-1]["content"] += (f" They asked for a photo: {c['name']} takes one and sends it now. Describe in "
                                         "*actions* exactly what the photo shows (pose, outfit, place, light) so it can "
-                                        "be pictured. " + heat.photo_note())
+                                        "be pictured. " + picture_heat.photo_note())
     if more:
         if not last or last["role"] != "assistant":
             return _err(400, "There's no reply to continue.")

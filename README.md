@@ -213,9 +213,21 @@ Your writing lives in the SQLite file named by `DATABASE_PATH` (default
 ### Models
 
 Two Featherless models are added on first start: Stheno 8B (roleplay, the
-default) and NemoMix Unleashed 12B (longer prose). Add any other Featherless
-model in **admin ▾ → Models & usage**, then pick it per novel in the story bible.
-Set `DREAMNET_DEFAULT_MODEL` to change the default for chats.
+default) and NemoMix Unleashed 12B (longer prose). Six uncensored roleplay
+models are also added once: Lunaris 8B, Rocinante 12B and Celeste 12B, plus
+Cydonia 24B, Euryale 70B and Magnum 72B, which need a Featherless plan that
+covers models that size. Remove any you don't want, or add any other Featherless
+model, in **admin ▾ → Models & usage**. Pick the model per chat in the chat
+header, or per novel in the story bible. Set `DREAMNET_DEFAULT_MODEL` to change
+the default for chats.
+
+### Heat level
+
+Each chat has a heat setting in its header: **Sweet** (intimate scenes fade to
+black), **Steamy** (sensual, not graphic) or **Explicit** (uncensored, the
+default). It changes what the AI is told from the next reply on. The hard rules
+stay at every level: every character is an adult, and no real people.
+Pictures and videos stay non-explicit.
 
 ### Lifelike portraits (optional)
 
