@@ -19,6 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import app.api_routes as api_routes
+import app.gpu as gpu
+import app.heat as heat
 import app.image_studio as image_studio
 import app.media_tools as media_tools
 import app.option_images as option_images
@@ -425,6 +427,9 @@ _UNITS = re.compile(r"(\d+(?:\.\d+)?)\s*(days?|d\b|hours?|hrs?|h\b|minutes?|mins
 async def init_studio_db(db_path: str):
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA)
+        row = await (await db.execute("SELECT value FROM studio_settings WHERE key = 'picture_heat'")).fetchone()
+        if row and row[0] in heat.LEVELS:
+            heat.set_level(row[0])
         cols = [r[1] for r in await (await db.execute("PRAGMA table_info(characters)")).fetchall()]
         if "portrait_prompt" not in cols:
             await db.execute("ALTER TABLE characters ADD COLUMN portrait_prompt TEXT NOT NULL DEFAULT ''")
@@ -1073,7 +1078,39 @@ async def upload_portrait(request: Request, s: dict = Depends(_session)):
 @router.get("/image-options")
 async def image_options(s: dict = Depends(_session)):
     return JSONResponse({**image_studio.options(), "enabled": portraits.can_make_portraits(),
-                         "video": media_tools.video_enabled()})
+                         "video": media_tools.video_enabled(), "video_backend": media_tools.video_backend(),
+                         "heat": heat.chosen(), "heat_applies": gpu.own_gpu(),
+                         "heat_levels": [{"key": k, "label": heat.LABELS[k]} for k in heat.LEVELS],
+                         "gpu": {"configured": gpu.configured(), "runpod": gpu.runpod_enabled()}})
+
+
+@router.put("/picture-heat")
+async def save_picture_heat(request: Request, s: dict = Depends(_session)):
+    """How much pictures and videos may show: tasteful, sensual or explicit (own GPU only)."""
+    level = str((await request.json()).get("level") or "")
+    try:
+        heat.set_level(level)
+    except ValueError as e:
+        return _err(400, str(e))
+    await _exec("INSERT INTO studio_settings (key, value) VALUES ('picture_heat', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (level,))
+    return JSONResponse({"heat": heat.chosen(), "heat_applies": gpu.own_gpu()})
+
+
+@router.get("/gpu")
+async def gpu_status(s: dict = Depends(_session)):
+    return JSONResponse(await gpu.status(api_routes.http_client))
+
+
+@router.post("/gpu/{action}")
+async def gpu_control(action: str, s: dict = Depends(_session)):
+    if action not in ("start", "stop"):
+        return _err(404, "Not found")
+    try:
+        await (gpu.start if action == "start" else gpu.stop)(api_routes.http_client)
+    except gpu.GPUError as e:
+        return _err(502, str(e))
+    return JSONResponse(await gpu.status(api_routes.http_client))
 
 
 def _image_out(r: dict) -> dict:
@@ -1227,7 +1264,7 @@ async def animate_image(iid: int, request: Request, s: dict = Depends(_session))
     if not src:
         return _err(404, "Picture not found")
     if not media_tools.video_enabled():
-        return _err(503, "Videos need a Replicate account: set REPLICATE_API_TOKEN on the server (see README).")
+        return _err(503, "Videos need a cloud GPU (see docs/cloud-gpu.md) or a Replicate account (REPLICATE_API_TOKEN).")
     body = await request.json()
     motion = str(body.get("motion") or "").strip()[:400] or "slowly turns toward the camera with a faint smile, hair moving softly"
     if mentions_minor(motion, strict=True):
@@ -1236,7 +1273,7 @@ async def animate_image(iid: int, request: Request, s: dict = Depends(_session))
     if not path:
         return _err(404, "That picture's file is missing.")
     try:
-        mp4 = await media_tools.make_video(api_routes.http_client, path.read_bytes(), motion)
+        mp4 = await media_tools.make_video(api_routes.http_client, path.read_bytes(), motion, src["shape"])
     except media_tools.MediaError as e:
         return _err(502, str(e))
     return JSONResponse({"images": [await _save_image(src["character_id"], mp4, motion, src["shape"], kind="video",
@@ -1416,7 +1453,7 @@ async def _scene_prompt(s: dict, m: dict) -> str:
                 + (f"TIME: {when}\n\n" if when else "")
                 + (f"JUST BEFORE (for where they are, what they wear, and lead-in only):\n{lead_in}\n\n" if lead_in else "")
                 + f"CURRENT MOMENT, written by {who_wrote} (this is what the picture shows):\n{current[:2000]}")
-    messages = [{"role": "system", "content": portraits.SCENE_INSTRUCTIONS},
+    messages = [{"role": "system", "content": portraits.scene_instructions()},
                 {"role": "user", "content": user_msg}]
     try:
         text = (await _complete(s["user_id"], messages, 0.6, 400)).strip().strip('"')
@@ -1429,7 +1466,7 @@ async def _scene_prompt(s: dict, m: dict) -> str:
     return (f"Cinematic photorealistic film still. {c['appearance']} {profiles.looks(profiles.clean(c.get('profile')))} "
             f"The moment: {plain} "
             + (f"Time of day: {_daypart(datetime.fromisoformat(m['story_at']))}. " if m["story_at"] else "")
-            + "All people are adults. Tasteful, no explicit nudity. Natural skin texture, real light, 35mm lens, "
+            + heat.rule() + " Natural skin texture, real light, 35mm lens, "
               "shallow depth of field. Not a drawing, not anime, not CGI.")
 
 
@@ -2099,7 +2136,7 @@ async def send_message(conv_id: int, request: Request, s: dict = Depends(_sessio
         if _PHOTO_ASK.search(messages[-1]["content"].split("\n\n[Respond as")[0]):
             messages[-1]["content"] += (f" They asked for a photo: {c['name']} takes one and sends it now. Describe in "
                                         "*actions* exactly what the photo shows (pose, outfit, place, light) so it can "
-                                        "be pictured. Keep it tasteful.")
+                                        "be pictured. " + heat.photo_note())
     if more:
         if not last or last["role"] != "assistant":
             return _err(400, "There's no reply to continue.")

@@ -95,8 +95,12 @@ async def lifespan(app: FastAPI):
     init_user(queue_mgr)
     await queue_mgr.start()
     await cache.start_cleanup()
+    import asyncio
+    import app.gpu as gpu
+    gpu_watch = asyncio.create_task(gpu.idle_watch(lambda: http_client))
     logger.info(f"Proxy started on {HOST}:{PORT} (max_conn={MAX_CONCURRENT_CONNECTIONS})")
     yield
+    gpu_watch.cancel()
     await cache.stop_cleanup()
     await queue_mgr.stop()
     await http_client.aclose()

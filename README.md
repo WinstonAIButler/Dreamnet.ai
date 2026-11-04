@@ -74,9 +74,15 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   editing model through a link that only works for 15 minutes (this needs the
   site's public address, which Render provides as `RENDER_EXTERNAL_URL`, or set
   `PUBLIC_URL`; `REMIX_SERVICE=off` turns it off and uses the picture's own
-  description instead). "Video" animates a picture into a short clip on
-  Replicate: set `REPLICATE_API_TOKEN` (and optionally `VIDEO_MODEL`, default
+  description instead). "Video" animates a picture into a short clip: on
+  your cloud GPU with Wan 2.2 (see [docs/cloud-gpu.md](docs/cloud-gpu.md)), or on
+  Replicate with `REPLICATE_API_TOKEN` (and optionally `VIDEO_MODEL`, default
   `wan-video/wan-2.2-i2v-fast`). Replicate charges per video.
+- **Cloud GPU and picture heat.** Rent a RunPod GPU by the hour and switch it on
+  and off from Create image; it stops itself when idle. On your own GPU, pick how
+  much pictures and videos may show: Tasteful, Sensual or Explicit. Online
+  services always stay tasteful, and everyone shown is always an adult and never
+  a real person. See [docs/cloud-gpu.md](docs/cloud-gpu.md).
 - **Detailed character profiles.** Beyond the basics, each character has a
   profile in six sections: look (build, face, eyes, hair, skin, scars, tattoos,
   piercings, style, scent, voice), personality (temperament, desires, fears,
@@ -165,7 +171,7 @@ server and talks to open-weight roleplay models through [Featherless.ai](https:/
   character plus anyone from your library named in the moment), the storyline,
   the scene so far, the last few messages and the in-story time of day. The
   picture stays with the message. Make a new one, edit the prompt, or remove
-  it. Uses the same ComfyUI as portraits, in landscape, and keeps it tasteful.
+  it. Uses the same ComfyUI as portraits, in landscape, at the picture heat you chose.
 - **Export** a novel as one Markdown manuscript.
 - **Installable** as an app on your phone or desktop (Add to Home Screen).
 

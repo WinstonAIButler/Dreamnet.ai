@@ -6,7 +6,6 @@ Z-Image-Turbo workflow from Intel AI Playground's "Pro 2 Image" preset
 Point COMFYUI_URL at AI Playground's own ComfyUI or any ComfyUI install that
 has the Z-Image-Turbo model files.
 """
-import asyncio
 import copy
 import os
 import random
@@ -15,7 +14,11 @@ from pathlib import Path
 
 import httpx
 
-COMFYUI_URL = os.getenv("COMFYUI_URL", "").rstrip("/")
+import app.gpu as gpu
+import app.heat as heat
+from app.safety import mentions_minor
+
+COMFYUI_URL = gpu.url()  # kept for older imports; use gpu.url()
 PORTRAIT_DIR = Path(os.getenv("PORTRAIT_DIR", "portraits"))
 PORTRAIT_TIMEOUT = float(os.getenv("PORTRAIT_TIMEOUT", "300"))
 
@@ -88,8 +91,7 @@ SCENE_INSTRUCTIONS = (
     "day) is only there to keep it accurate: each character's face, hair, eyes, build, skin, scars, tattoos, "
     "piercings and clothing must match their details exactly, and the place, weather and light must fit the "
     "story so far and the time of day. Name no one; describe each person by their looks so the image model can "
-    "draw them. Every person is an adult. Keep it tasteful: if the moment is intimate, show it through closeness, "
-    "touch, expressions, sheets or shadow, with no explicit nudity; violence can be tense but not gory. It must "
+    "draw them. {heat} Violence can be tense but not gory. It must "
     "look like a real photograph: natural skin texture, real light, 35mm or 50mm lens, cinematic colour grade, "
     "shallow depth of field. Supernatural traits are subtle and realistic, never cartoon, anime, CGI or "
     "illustration. Return only the prompt as one paragraph of at most 180 words, no preamble."
@@ -100,8 +102,13 @@ class PortraitError(Exception):
     pass
 
 
+def scene_instructions() -> str:
+    """SCENE_INSTRUCTIONS with the picture heat rule that applies right now."""
+    return SCENE_INSTRUCTIONS.replace("{heat}", heat.rule())
+
+
 def enabled() -> bool:
-    return bool(COMFYUI_URL)
+    return gpu.configured()
 
 
 def template_prompt(c: dict) -> str:
@@ -155,43 +162,15 @@ async def make_portrait(client: httpx.AsyncClient, prompt: str, width: int = WID
 
 async def generate(client: httpx.AsyncClient, prompt: str, seed: int | None = None,
                    width: int = WIDTH, height: int = HEIGHT) -> bytes:
-    """Queue the workflow on ComfyUI, wait for it, and return the PNG bytes."""
+    """Queue the workflow on ComfyUI (your own or the cloud GPU), wait for it, and return the PNG bytes."""
     if not enabled():
-        raise PortraitError("Portrait generation is off. Set COMFYUI_URL to your ComfyUI server.")
-    client_id = secrets.token_hex(8)
+        raise PortraitError("Picture making is off. Set COMFYUI_URL, or set up a cloud GPU (see docs/cloud-gpu.md).")
+    if mentions_minor(prompt):
+        raise PortraitError("Pictures must show adults only.")
     try:
-        r = await client.post(f"{COMFYUI_URL}/prompt",
-                              json={"prompt": build_workflow(prompt, seed, width, height), "client_id": client_id}, timeout=30)
-    except httpx.RequestError as e:
-        raise PortraitError(f"Can't reach ComfyUI at {COMFYUI_URL}: {e}") from e
-    if r.status_code != 200:
-        raise PortraitError(f"ComfyUI rejected the workflow ({r.status_code}): {r.text[:300]}")
-    prompt_id = r.json().get("prompt_id")
-    if not prompt_id:
-        raise PortraitError("ComfyUI did not return a prompt id.")
-
-    deadline = asyncio.get_event_loop().time() + PORTRAIT_TIMEOUT
-    while asyncio.get_event_loop().time() < deadline:
-        await asyncio.sleep(1.5)
-        h = await client.get(f"{COMFYUI_URL}/history/{prompt_id}", timeout=30)
-        entry = h.json().get(prompt_id) if h.status_code == 200 else None
-        if not entry:
-            continue
-        status = entry.get("status") or {}
-        if status.get("status_str") == "error":
-            msgs = [m for m in status.get("messages", []) if m and m[0] == "execution_error"]
-            detail = msgs[0][1].get("exception_message", "") if msgs else ""
-            raise PortraitError(f"ComfyUI failed to generate the portrait. {detail}".strip())
-        for out in (entry.get("outputs") or {}).values():
-            for img in out.get("images", []):
-                v = await client.get(f"{COMFYUI_URL}/view", params={
-                    "filename": img["filename"], "subfolder": img.get("subfolder", ""),
-                    "type": img.get("type", "output")}, timeout=60)
-                if v.status_code == 200:
-                    return v.content
-        if status.get("completed"):
-            raise PortraitError("ComfyUI finished but returned no image.")
-    raise PortraitError("Timed out waiting for ComfyUI.")
+        return await gpu.run_workflow(client, build_workflow(prompt, seed, width, height), PORTRAIT_TIMEOUT)
+    except gpu.GPUError as e:
+        raise PortraitError(str(e)) from e
 
 
 def save(character_id: int, png: bytes, kind: str = "character", ext: str = "png") -> str:

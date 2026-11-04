@@ -4,6 +4,7 @@ Choices for the "Create image" page and the prompt they build. Each picture show
 characters, always an adult, as a realistic photograph: the character's own looks come from their card,
 and the scene, outfit, pose and shape come from the page.
 """
+import app.heat as heat
 
 # (label, how it reads in the prompt)
 SCENES = [
@@ -106,7 +107,7 @@ def build_prompt(c: dict, looks: str, scene: str, outfit: str, pose: str, detail
     if c.get("tagline"):
         parts.append(f"Mood that fits: {c['tagline']}.")
     parts.append(
-        "An adult, tasteful and sensual, no explicit nudity. It must look like a real photograph of a real person: "
+        heat.rule() + " It must look like a real photograph of a real person: "
         "natural skin with pores and fine imperfections, real light, cinematic colour grade, 50mm or 85mm lens, "
         "shallow depth of field, high detail. Not a drawing, not anime, not CGI, not a cartoon."
     )
