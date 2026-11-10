@@ -1,0 +1,18 @@
+{% extends "public/base.html" %}
+{% block content %}
+<h1>Trust &amp; safety</h1>
+<p class="lead">What we promise, and how we keep Dreamnet safe for the adults who use it.</p>
+<div class="grid">
+  <div class="card"><h3>Adults only</h3><p>Every account confirms it's 18 or older. Before public launch we're adding a third-party age check, which is required in some places by law.</p></div>
+  <div class="card"><h3>Fictional adults only</h3><p>Every character must be an adult, 18 or older, and fictional. Minors, childlike framing and real people are blocked on every character and every message.</p></div>
+  <div class="card"><h3>No real people</h3><p>No uploading photos of real people to make characters or pictures, no face swaps and no lookalikes of public figures.</p></div>
+  <div class="card"><h3>Your chats stay private</h3><p>Your characters, chats and pictures are visible only to you. We never sell your data, and we don't use your chats to train AI models.</p></div>
+  <div class="card"><h3>Fair billing</h3><p>The price shown is the price charged. Credits roll over. Cancel in one tap. Failed generations refund automatically.</p></div>
+  <div class="card"><h3>Support from people</h3><p>Questions, refunds and reports go to a person, not a bot.{% if contact %} Write to {{ contact }}.{% endif %}</p></div>
+</div>
+<h2>How moderation works</h2>
+<div class="prose">
+  <p>Every character definition and every message is checked automatically before the AI sees it. Anything involving minors or real people is blocked, and repeat attempts close the account. Reports of anything else that breaks our rules are reviewed by a person. If someone mentions self-harm, the character steps out of the story and shares crisis resources.</p>
+  <p>Read the full rules in our <a href="/content-policy">Content Policy</a>.</p>
+</div>
+{% endblock %}

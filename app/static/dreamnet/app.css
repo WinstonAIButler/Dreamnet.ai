@@ -235,6 +235,13 @@ h2 { font-family: var(--serif); font-weight: 600; font-size: 30px; margin: 0; }
 .login-view { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
 .login-card { width: 100%; max-width: 360px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 24px; padding: 32px; }
 .login-card .brand { font-family: var(--serif); }
+.login-view { padding: 24px 16px; }
+.login-card .check { flex-direction: row; align-items: flex-start; gap: 10px; font-weight: 500; font-size: 13px; color: var(--muted); }
+.login-card .check input { margin-top: 3px; accent-color: var(--accent); flex: none; }
+.login-card .check a, .auth-switch a { color: var(--accent); }
+.auth-switch { margin: 0; text-align: center; font-size: 14px; }
+.auth-legal { margin: 0; text-align: center; font-size: 12px; color: var(--muted); }
+.auth-legal a { color: var(--muted); }
 
 .novels { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
 .novel-card { display: flex; flex-direction: column; gap: 8px; padding: 20px; border-radius: var(--radius); text-decoration: none;

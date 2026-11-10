@@ -29,3 +29,14 @@ services:
         value: /var/data/portraits
       - key: TTS_CACHE
         value: /var/data/tts_cache
+      # Launch settings (app/launch.py)
+      - key: SIGNUP_OPEN
+        value: "1"           # "0" closes self-serve sign-up
+      - key: SIGNUP_CREDITS
+        value: "5"           # starting credits for each new account
+      - key: FREE_CHAT
+        value: "1"           # chat text never uses credits, as the pricing page says
+      - key: DREAMNET_COMPANY
+        value: Dreamnet.ai   # legal name on the Terms and Privacy pages
+      - key: DREAMNET_CONTACT
+        sync: false          # support / legal email shown on the legal pages

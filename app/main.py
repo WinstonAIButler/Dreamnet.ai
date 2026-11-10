@@ -34,6 +34,7 @@ from app.admin_routes import router as admin_router, init_admin
 from app.user_routes import router as user_router, init_user
 from app.studio import router as studio_router, init_studio_db
 from app.jarvis import router as jarvis_router
+import app.launch as launch
 
 # Config
 FEATHERLESS_API_BASE = os.getenv("FEATHERLESS_API_BASE", "https://api.featherless.ai/v1")
@@ -71,7 +72,7 @@ import app.admin_routes as _admin_routes
 import app.user_routes as _user_routes
 import app.auth as _auth
 import app.studio as _studio
-for _mod in (_api_routes, _admin_routes, _user_routes, _auth, _studio):
+for _mod in (_api_routes, _admin_routes, _user_routes, _auth, _studio, launch):
     _mod.DB_PATH = DATABASE_PATH
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -88,6 +89,7 @@ async def lifespan(app: FastAPI):
     global http_client
     await init_db(DATABASE_PATH)
     await init_studio_db(DATABASE_PATH)
+    await launch.migrate(DATABASE_PATH)
 
     # Create default admin if no users exist
     from app.database import list_users, create_user
@@ -141,6 +143,7 @@ app.include_router(api_router)
 app.include_router(admin_router)
 app.include_router(user_router)
 app.include_router(studio_router)
+app.include_router(launch.router)  # /api/signup and the public pricing, trust and legal pages
 app.include_router(jarvis_router)  # /jarvis and /api/jarvis: the read-only operations page
 
 

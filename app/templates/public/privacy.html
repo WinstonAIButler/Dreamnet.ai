@@ -1,0 +1,41 @@
+{% extends "public/base.html" %}
+{% block content %}
+<h1>Privacy Policy</h1>
+<p class="meta">Last updated {{ updated }}</p>
+<div class="prose">
+<p>This policy explains what {{ company }} collects when you use Dreamnet, why, and what control you have.</p>
+<h2>What we collect</h2>
+<ul>
+  <li><b>Account details:</b> your username, a securely hashed password, when you confirmed your age and accepted the terms, and a one-way hash of the network address you signed up from (to stop abuse).</li>
+  <li><b>What you create:</b> your characters, chats, stories and pictures.</li>
+  <li><b>Usage:</b> which features and AI models you use and how many credits they cost, so we can bill fairly and keep the service running.</li>
+  <li><b>Payments:</b> handled by our payment processor. We never see or store your full card number.</li>
+</ul>
+<h2>How we use it</h2>
+<ul>
+  <li>To run Dreamnet for you: generate replies, pictures and voices, and remember your conversations.</li>
+  <li>To keep it safe: enforce the Content Policy and prevent abuse.</li>
+  <li>To bill you and answer support requests.</li>
+</ul>
+<h2>What we never do</h2>
+<ul>
+  <li>Sell your data or share it with advertisers.</li>
+  <li>Use your chats or characters to train AI models.</li>
+  <li>Make your characters, chats or pictures visible to anyone else.</li>
+</ul>
+<h2>Who processes it</h2>
+<p>We use a small number of providers to run the service: our hosting provider, the AI model provider that generates replies, our picture-generation servers and, once paid plans open, our payment processor. They process data only to provide their service to us.</p>
+<h2>Voices</h2>
+<p>Voice playback runs on your own device. The text being read doesn't leave your browser for voice generation.</p>
+<h2>Your choices</h2>
+<ul>
+  <li>Delete any chat, character or picture at any time.</li>
+  <li>Ask us to export or delete your whole account and its data.</li>
+  <li>If you live in the EU, UK or California, you have additional rights to access, correct and delete your data. Contact us to use them.</li>
+</ul>
+<h2>Keeping data</h2>
+<p>We keep your data while your account is open. When you delete your account, we delete its data within 30 days, except records the law requires us to keep, such as payment records.</p>
+<h2>Contact</h2>
+<p>{% if contact %}{{ contact }}{% else %}Use the support link in your account.{% endif %}</p>
+</div>
+{% endblock %}

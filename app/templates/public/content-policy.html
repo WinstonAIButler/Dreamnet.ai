@@ -1,0 +1,28 @@
+{% extends "public/base.html" %}
+{% block content %}
+<h1>Content Policy</h1>
+<p class="meta">Last updated {{ updated }}</p>
+<div class="prose">
+<p>Dreamnet is a fiction platform for adults. Dark and mature themes are allowed between fictional adults. These limits apply to every character, message, picture and story, with no exceptions.</p>
+<h2>Never allowed</h2>
+<ul>
+  <li>Anyone under 18, or any character described, styled or behaving as a child, including "ageless" or "looks younger" framings.</li>
+  <li>Real people: no characters, pictures or sexual content based on real, identifiable people, including celebrities, creators and people you know.</li>
+  <li>Uploading photos of real people to generate pictures of them.</li>
+  <li>Incest, bestiality and sexual content involving death or corpses.</li>
+  <li>Content that promotes or gives instructions for real-world violence, terrorism, weapons or self-harm.</li>
+  <li>Hate speech that targets people for who they are.</li>
+  <li>Using Dreamnet to harass, threaten, extort or impersonate a real person.</li>
+  <li>Characters or content copied from other people's copyrighted work without permission.</li>
+</ul>
+<h2>What happens when something crosses a line</h2>
+<ul>
+  <li>Minors and real people are checked automatically on every character and message, and blocked before the AI sees them.</li>
+  <li>Other violations are removed when they're found or reported.</li>
+  <li>Repeated or serious attempts suspend or close the account.</li>
+  <li>Anything involving the sexual exploitation of children is reported to the National Center for Missing &amp; Exploited Children (NCMEC) as the law requires.</li>
+</ul>
+<h2>Reporting</h2>
+<p>If you see something that breaks these rules, or believe content shows you or someone you know, {% if contact %}email {{ contact }}{% else %}contact support{% endif %} and we'll review it within 24 hours.</p>
+</div>
+{% endblock %}

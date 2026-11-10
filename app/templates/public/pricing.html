@@ -1,0 +1,26 @@
+{% extends "public/base.html" %}
+{% block content %}
+<h1>Chat free, as long as you want</h1>
+<p class="lead">No message caps and no blurred replies. Voices are free too. Credits are only for pictures and premium extras, and you'll see what everything costs before you pay.</p>
+<div class="grid">
+{% for p in plans %}
+  <div class="card plan{{ ' best' if p.best }}">
+    {% if p.best %}<span class="badge">Most popular</span>{% endif %}
+    <h3>{{ p.name }}</h3>
+    <div class="price">{{ p.price }}<small>{{ p.per }}</small></div>
+    <ul>{% for pt in p.points %}<li>{{ pt }}</li>{% endfor %}</ul>
+    {% if p.cta == "Opening soon" %}<span class="btn" aria-disabled="true">Opening soon</span>{% else %}<a class="btn pri" href="/#/signup">{{ p.cta }}</a>{% endif %}
+  </div>
+{% endfor %}
+</div>
+<div class="note">Dreamnet is in beta. Paid plans open soon. During the beta, chat, voices and pictures are all free.</div>
+<h2>How credits work</h2>
+<div class="prose">
+  <ul>
+    <li>Chat and voices never use credits, on any plan.</li>
+    <li>Credits you buy or earn roll over month to month and never expire.</li>
+    <li>If a picture fails to generate, its credits come back automatically.</li>
+    <li>The price you see here is the price you pay at checkout. No surprise "sale" maths.</li>
+  </ul>
+</div>
+{% endblock %}

@@ -35,6 +35,7 @@ from app.database import (
 from app.safety import CRISIS_RESPONSE, SAFETY_RULES, check_character, is_crisis, mentions_minor
 
 router = APIRouter(prefix="/app/api")
+FREE_CHAT = os.getenv("FREE_CHAT", "1") == "1"
 
 logger = logging.getLogger("featherless-proxy.studio")
 DEFAULT_MODEL = os.getenv("DREAMNET_DEFAULT_MODEL", "Sao10K/L3-8B-Stheno-v3.2")
@@ -617,7 +618,11 @@ async def _stream(request: Request, session: dict, model: str, messages: list[di
         return _err(503, NO_AI_KEY)
     key = await _web_key(session["user_id"])
     is_admin = api_routes._is_admin_key(key)
-    if not is_admin and (key.get("user_credits") or 0) <= 0:
+    # FREE_CHAT=1 (the default): chat, story and novel text never use credits, as the pricing
+    # page promises. Featherless is a flat-rate plan, so text has no per-message cost to us.
+    # Usage is still logged. Set FREE_CHAT=0 to charge text by tokens again.
+    no_charge = is_admin or FREE_CHAT
+    if not no_charge and (key.get("user_credits") or 0) <= 0:
         return _err(402, "This account has no credits left. Top it up in the admin panel.")
     body = {"model": model, "messages": messages, "stream": True,
             "temperature": temperature, "top_p": 0.95, "max_tokens": max_tokens}
@@ -625,7 +630,7 @@ async def _stream(request: Request, session: dict, model: str, messages: list[di
     hit = await api_routes.cache.get(model, messages, temperature=temperature)
     cached_ratio = hit.get("_cached_ratio", 0.0) if hit else 0.0
     upstream = await api_routes._handle_streaming(
-        request, body, model, messages, temperature, cfg, key, session["user_id"], is_admin,
+        request, body, model, messages, temperature, cfg, key, session["user_id"], no_charge,
         key.get("priority", 1), cached_ratio)
 
     async def relay():
@@ -847,14 +852,15 @@ def _character_fields(body: dict) -> dict:
     f["age"] = body.get("age")
     f["profile"] = profiles.clean(body.get("profile"))
     f["voice"] = str(body.get("voice") or "")
-    if f["voice"] and f["voice"] not in voices.VOICE_IDS and not f["voice"].startswith("device:"):
+    kokoro_ids = {"kokoro:" + v[0] for v in voices.KOKORO_VOICES}
+    if f["voice"] and f["voice"] not in voices.VOICE_IDS and f["voice"] not in kokoro_ids and not f["voice"].startswith("device:"):
         f["voice"] = ""
     f["voice_tone"] = body.get("voice_tone") if body.get("voice_tone") in voices.TONES else "natural"
     try:
         f["voice_rate"] = max(-50, min(50, int(body.get("voice_rate") or 0)))
     except (TypeError, ValueError):
         f["voice_rate"] = 0
-    f["voice_engine"] = body.get("voice_engine") if body.get("voice_engine") in voices.ENGINES else "edge"
+    f["voice_engine"] = body.get("voice_engine") if body.get("voice_engine") in voices.ENGINES else voices.DEFAULT_ENGINE
     f["voice_profile"] = str(body.get("voice_profile") or "").strip()[:200]
     style = voices.clean_style(body.get("voice_style"))
     f["voice_style"] = json.dumps(style) if style else ""
@@ -1014,7 +1020,10 @@ async def list_voices(s: dict = Depends(_session)):
     return JSONResponse({"enabled": voices.enabled(), "regions": voices.REGIONS, "voices": voices.VOICES,
                          "tones": list(voices.TONES), "defaults": voices.DEFAULT_VOICE,
                          "voicestudio": await voices.voicestudio_status(api_routes.http_client),
-                         "presets": voices.preset_catalog()})
+                         "presets": voices.preset_catalog(),
+                         "default_engine": voices.DEFAULT_ENGINE, "edge_allowed": voices.EDGE_ALLOWED,
+                         "kokoro": [{"id": v[0], "name": v[1], "gender": v[2]} for v in voices.KOKORO_VOICES],
+                         "kokoro_defaults": voices.KOKORO_DEFAULT})
 
 
 @router.post("/tts")
@@ -1050,6 +1059,8 @@ async def tts(request: Request, s: dict = Depends(_session)):
             return Response(audio, media_type="audio/mpeg", headers={**headers, "X-Voice-Engine": "voicestudio"})
         except voices.VoiceError as e:
             headers["X-Voice-Fallback"] = str(e)[:200]
+    if not voices.EDGE_ALLOWED:
+        return _err(403, headers.get("X-Voice-Fallback") or "Online voices are off on this server. Voices play on your device instead.")
     try:
         audio = await voices.synthesize(text, voice, tone, rate, pitch)
     except voices.VoiceError as e:
