@@ -1,0 +1,30 @@
+{% extends "public/base.html" %}
+{% block content %}
+<h1>Terms of Service</h1>
+<p class="meta">Last updated {{ updated }} · Version 2026-11-10</p>
+<div class="prose">
+<p>These terms are an agreement between you and {{ company }} ("Dreamnet", "we"). By creating an account you agree to them.</p>
+<h2>1. You must be an adult</h2>
+<p>You must be at least 18, and old enough to view adult content where you live. If we learn an account belongs to someone under 18, we close it. We may ask you to verify your age at any time.</p>
+<h2>2. Everything here is fiction</h2>
+<p>Characters on Dreamnet are AI. They aren't real people, they don't have feelings, and what they say isn't advice. Don't rely on them for medical, legal, financial or mental-health decisions. If you're in crisis, contact local emergency services or a crisis line.</p>
+<h2>3. Your account</h2>
+<p>Keep your password private; you're responsible for what happens on your account. One person per account. Don't create accounts to get around a suspension.</p>
+<h2>4. Your content</h2>
+<p>You keep ownership of the characters, stories and prompts you create. You give us permission to store and process them only to run Dreamnet for you. You're responsible for making sure what you create follows our <a href="/content-policy">Content Policy</a>.</p>
+<h2>5. Rules</h2>
+<p>Follow the Content Policy. Don't try to break, overload or reverse-engineer the service, scrape it, or resell access to it.</p>
+<h2>6. Credits and payments</h2>
+<p>Credits pay for pictures, voice and other features. They have no cash value and can't be transferred. Paid plans renew until you cancel, and you can cancel any time from your account. Generations that fail are refunded in credits automatically. Refund requests for payments go to support and are reviewed by a person.</p>
+<h2>7. Ending your account</h2>
+<p>You can delete your account at any time. We may suspend or close accounts that break these terms.</p>
+<h2>8. No warranty</h2>
+<p>Dreamnet is provided "as is". AI output can be wrong, unexpected or offensive, and the service may sometimes be unavailable.</p>
+<h2>9. Liability</h2>
+<p>To the extent the law allows, our total liability to you is limited to the amount you paid us in the 12 months before the claim.</p>
+<h2>10. Changes</h2>
+<p>We'll tell you before material changes take effect. Continuing to use Dreamnet after that means you accept them.</p>
+<h2>Contact</h2>
+<p>{% if contact %}{{ contact }}{% else %}Use the support link in your account.{% endif %}</p>
+</div>
+{% endblock %}

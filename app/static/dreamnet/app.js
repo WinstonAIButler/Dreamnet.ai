@@ -114,14 +114,62 @@
     } catch (e) { /* no effects on this browser; the plain voice still plays */ }
     return a;
   }
+  // Kokoro-82M (Apache-2.0) in the browser: free, private, no server. Loads once (~90 MB) and is cached.
+  var kokoroP = null, kokoroRun = 0;
+  function loadKokoro() {
+    if (!kokoroP) {
+      toast("Loading the free voice model (about 90 MB, first time only)…");
+      kokoroP = import("https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js")
+        .then(function (m) { return m.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", { dtype: "q8", device: "wasm" }); })
+        .catch(function (e) { kokoroP = null; throw e; });
+    }
+    return kokoroP;
+  }
+  function kokoroVoice(v, info) {
+    if (v.voice && v.voice.indexOf("kokoro:") === 0) return v.voice.slice(7);
+    var d = info.kokoro_defaults || {};
+    return d[voiceGender(v.gender)] || d.female || "af_heart";
+  }
+  function speakKokoro(text, mode, v, info, onEnd) {
+    var run = ++kokoroRun, plain = speakableText(text, mode);
+    if (!plain) { if (onEnd) onEnd(); return Promise.resolve(); }
+    var speed = Math.max(0.6, Math.min(1.6, 1 + (+v.rate || 0) / 100));
+    // Sentence by sentence, so the first words play while the rest is still being made.
+    var parts = plain.match(/[^.!?…]+[.!?…]+["”']?\s*|[^.!?…]+$/g) || [plain], chunks = [], cur = "";
+    parts.forEach(function (p) { if ((cur + p).length > 260 && cur) { chunks.push(cur); cur = p; } else cur += p; });
+    if (cur.trim()) chunks.push(cur);
+    return loadKokoro().then(function (tts) {
+      var voice = kokoroVoice(v, info), next = tts.generate(chunks[0], { voice: voice, speed: speed });
+      function play(i, pending) {
+        return pending.then(function (out) {
+          if (run !== kokoroRun) return;
+          var after = i + 1 < chunks.length ? tts.generate(chunks[i + 1], { voice: voice, speed: speed }) : null;
+          var blob = out.toBlob ? out.toBlob() : new Blob([out.toWav()], { type: "audio/wav" });
+          var a = playAudio(blob, v.style && v.style.sound);
+          player = a;
+          return new Promise(function (res) {
+            a.onended = a.onerror = function () { if (player === a) player = null; res(); };
+            a.play().catch(function (e) { res(); if (e.name === "NotAllowedError") { toast("Tap Listen to hear it; your browser blocked autoplay.", true); run = -1; } });
+          }).then(function () { if (after && run === kokoroRun) return play(i + 1, after); });
+        });
+      }
+      return play(0, next).then(function () { if (run === kokoroRun && onEnd) onEnd(); });
+    }).catch(function (e) {
+      if (run !== kokoroRun) return;
+      console.warn("Kokoro voice unavailable", e);
+      toast("The free voice couldn't load on this browser, so this device's voice is reading instead.", true);
+      return speakOnDevice(plain, "", v, onEnd);
+    });
+  }
   function stopSpeaking() {
+    kokoroRun++;
     if (player) { player.pause(); if (player.echo) player.echo.pause(); player = null; }
     if (window.speechSynthesis) speechSynthesis.cancel();
     if (voiceHook) voiceHook();
   }
   function voiceFor(c) {
     return { voice: c.voice || "", tone: c.voice_tone || "natural", rate: +c.voice_rate || 0, gender: c.gender,
-      engine: c.voice_engine || "edge", profile: c.voice_profile || "", age: c.age, name: c.name, character_id: c.id,
+      engine: c.voice_engine || "", profile: c.voice_profile || "", age: c.age, name: c.name, character_id: c.id,
       style: parseStyle(c.voice_style) };
   }
   function parseStyle(raw) {
@@ -134,6 +182,9 @@
     stopSpeaking();
     var mode = pref("readMode", "all");
     return loadVoices().then(function (info) {
+      var eng = v.engine || info.default_engine || "edge";
+      if (eng === "edge" && info.edge_allowed === false) eng = "kokoro";
+      if (eng === "kokoro" || (v.voice && v.voice.indexOf("kokoro:") === 0 && eng !== "voicestudio")) return speakKokoro(text, mode, v, info, onEnd);
       var id = v.voice || (info.defaults || {})[v.gender] || (info.defaults || {})[voiceGender(v.gender)] || "en-US-AvaNeural";
       var studio = v.engine === "voicestudio";
       if (!studio && (id.indexOf("device:") === 0 || !info.enabled || onlineFailed)) return speakOnDevice(speakableText(text, mode), id, v, onEnd);
@@ -184,11 +235,12 @@
     var vs = c.voice_engine === "voicestudio", usePreset = !!parseStyle(c.voice_style) || (!c.id && !c.name);
     return '<fieldset class="voice-box"><legend>Voice <span class="hint">how ' + esc(c.name || "they") + ' sound when replies are read aloud</span></legend>' +
       '<div class="two"><label>Engine<select name="voice_engine">' +
-        '<option value="edge"' + (vs ? "" : " selected") + '>Online voices (Microsoft Edge)</option>' +
+        '<option value="kokoro"' + (!c.voice_engine || c.voice_engine === "kokoro" ? " selected" : "") + '>Studio voices (free, play on this device)</option>' +
+        '<option value="edge"' + (c.voice_engine === "edge" ? " selected" : "") + '>Online voices (Microsoft Edge)</option>' +
         '<option value="voicestudio"' + (vs ? " selected" : "") + '>VoiceStudio on this computer</option></select></label>' +
       '<label class="vs-only"' + (vs ? "" : " hidden") + '>VoiceStudio voice<select name="voice_profile"><option value="">Designed for ' + esc(c.name || "this character") + '</option></select></label></div>' +
       '<p class="hint vs-only" id="vsNote"' + (vs ? "" : " hidden") + '></p>' +
-      '<div class="two"><label>Voice type<select name="voice_kind"><option value="preset"' + (usePreset ? " selected" : "") + '>Accent voice (accent, age, sound)</option>' +
+      '<div class="two kind-row"><label>Voice type<select name="voice_kind"><option value="preset"' + (usePreset ? " selected" : "") + '>Accent voice (accent, age, sound)</option>' +
         '<option value="country"' + (usePreset ? "" : " selected") + '>Pick by country</option></select></label><span></span></div>' +
       '<div class="preset-box" id="presetBox">' +
         '<div class="two"><label>Accent<select name="vp_accent"></select></label><label>Age<select name="vp_age"></select></label></div>' +
@@ -219,8 +271,21 @@
       var eur = info.regions.filter(function (r) { return r[0].indexOf("en-") !== 0; });
       regionSel.innerHTML = '<optgroup label="English-speaking countries">' + regionOpts(eng) + "</optgroup>" +
         (eur.length ? '<optgroup label="Europe (English with that accent)">' + regionOpts(eur) + "</optgroup>" : "");
+      if (info.edge_allowed === false) {  // a hosted server: Edge voices are off, so Kokoro stands in
+        var eo = form.voice_engine.querySelector('option[value="edge"]');
+        if (eo) { if (form.voice_engine.value === "edge") form.voice_engine.value = "kokoro"; eo.remove(); }
+      }
       function fill() {
         var reg = regionSel.value, groups = { male: [], female: [] };
+        if (form.voice_engine.value === "kokoro") {
+          var ko = info.kokoro || [], want = current.indexOf("kokoro:") === 0 ? current : "kokoro:" + kokoroVoice({ gender: form.gender.value }, info);
+          voiceSel.innerHTML = ["female", "male"].map(function (g) {
+            var list = ko.filter(function (k) { return k.gender === g; });
+            return list.length ? '<optgroup label="' + (g === "male" ? "Male" : "Female") + '">' + list.map(function (k) {
+              return '<option value="kokoro:' + k.id + '"' + ("kokoro:" + k.id === want ? " selected" : "") + ">" + esc(k.name) + "</option>"; }).join("") + "</optgroup>" : "";
+          }).join("");
+          return;
+        }
         info.voices.forEach(function (v) { if (v.region === reg) groups[v.gender].push(v); });
         var dev = deviceVoices().filter(function (v) { return v.lang.replace("_", "-").toLowerCase().indexOf(reg.toLowerCase()) === 0; });
         voiceSel.innerHTML = ["female", "male"].map(function (g) {
@@ -237,7 +302,7 @@
       regionSel.onchange = function () { fill(); current = voiceSel.value; };
       voiceSel.onchange = function () { current = voiceSel.value; };
       fill();
-      if (!info.enabled) document.getElementById("voiceNote").textContent = "Online voices aren't installed; device voices will be used.";
+      if (!info.enabled && info.edge_allowed !== false) document.getElementById("voiceNote").textContent = "Online voices aren't installed; device voices will be used.";
       // VoiceStudio: a voice designed from gender, age, tone and country (same voice every time), or one saved in VoiceStudio.
       var vsInfo = info.voicestudio || { online: false, profiles: [], url: "" };
       var profSel = form.voice_profile, have = false;
@@ -256,7 +321,7 @@
           : profSel.value ? "Uses this voice from VoiceStudio. Country and tone don't change it; speed does."
           : "Designed from gender, age, tone and country, and the same every time. Thoughts are whispered. Accents: American, British, Canadian, Australian, Indian, Russian or Portuguese, the closest to the country. For another European accent, clone or design one in VoiceStudio and pick it above.";
       }
-      form.voice_engine.onchange = function () { showEngine(); showKind(); }; profSel.onchange = showEngine; showEngine();
+      form.voice_engine.onchange = function () { showEngine(); fill(); current = voiceSel.value; showKind(); }; profSel.onchange = showEngine; showEngine();
       // Accent voices: accent x age x gender x sound.
       var pre = info.presets || { accents: [], ages: [], sounds: [] }, st = parseStyle(c.voice_style) || {};
       function opts(list, cur) { return list.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === cur ? " selected" : "") + ">" + esc(x[1]) + "</option>"; }).join(""); }
@@ -265,9 +330,13 @@
       form.vp_sound.innerHTML = opts(pre.sounds, st.sound || "clear");
       form.vp_gender.value = st.gender || voiceGender(form.gender.value);
       function showKind() {
+        var kok = form.voice_engine.value === "kokoro";
+        form.querySelector(".kind-row").hidden = kok;
+        if (kok) form.voice_kind.value = "country";
         var preset = form.voice_kind.value === "preset";
         document.getElementById("presetBox").hidden = !preset;
         form.querySelectorAll(".country-only").forEach(function (el) { el.hidden = preset; });
+        regionSel.closest("label").hidden = kok; form.voice_tone.closest("label").hidden = preset || kok;
         var vsOn = form.voice_engine.value === "voicestudio" && !form.voice_profile.value;
         document.getElementById("presetNote").textContent = !preset ? "" :
           vsOn && form.vp_accent.value !== "russian" ? "VoiceStudio has no " + form.vp_accent.selectedOptions[0].textContent + " accent built in, so this preset reads with the online voices. Pick a saved VoiceStudio voice to use your own." :
@@ -576,18 +645,57 @@
 
   // ---------- auth ----------
 
-  function showLogin() {
+  function showLogin(mode) {
+    if (mode !== "signup" && mode !== "login") mode = location.hash === "#/signup" ? "signup" : "login";
     document.getElementById("topbar").hidden = true;
     view.className = "login-view";
+    var legal = '<p class="auth-legal"><a href="/pricing">Pricing</a> · <a href="/trust">Trust &amp; safety</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>';
+    if (mode === "signup") {
+      view.innerHTML =
+        '<form class="login-card form" id="signupForm">' +
+        '  <div class="brand big"><img class="brand-mark" src="/static/dreamnet/icon.svg" alt=""> Dreamnet</div>' +
+        '  <p class="muted">Create a free account. Chat as much as you want.</p>' +
+        '  <label>Username<input name="username" autocomplete="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" title="3 to 24 letters, numbers or underscores" required autofocus></label>' +
+        '  <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>' +
+        '  <label class="check"><input type="checkbox" name="age" required> <span>I\'m 18 or older, and adult content is legal where I live.</span></label>' +
+        '  <label class="check"><input type="checkbox" name="terms" required> <span>I agree to the <a href="/terms" target="_blank" rel="noopener">Terms</a> and <a href="/content-policy" target="_blank" rel="noopener">Content Policy</a>, and I understand every character is a fictional adult.</span></label>' +
+        '  <p class="form-error" id="loginErr"></p>' +
+        '  <button class="btn primary wide">Create free account</button>' +
+        '  <p class="muted auth-switch">Already have an account? <a href="#/login" id="toLogin">Sign in</a></p>' + legal +
+        "</form>";
+      document.getElementById("toLogin").onclick = function (e) { e.preventDefault(); history.replaceState(null, "", "#/"); showLogin("login"); };
+      document.getElementById("signupForm").onsubmit = function (e) {
+        e.preventDefault();
+        var f = e.target, err = document.getElementById("loginErr"), btn = f.querySelector("button.primary");
+        err.textContent = ""; btn.disabled = true;
+        fetch("/api/signup", {
+          method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: f.username.value.trim(), password: f.password.value,
+            age_confirmed: f.age.checked, terms_accepted: f.terms.checked }),
+        }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+          .then(function (res) {
+            btn.disabled = false;
+            if (!res.ok) { err.textContent = res.d.error || "Couldn't create the account. Try again."; return; }
+            history.replaceState(null, "", "#/");
+            boot();
+          }).catch(function () { btn.disabled = false; err.textContent = "Couldn't reach Dreamnet. Check your connection and try again."; });
+      };
+      return;
+    }
     view.innerHTML =
       '<form class="login-card form" id="loginForm">' +
       '  <div class="brand big"><img class="brand-mark" src="/static/dreamnet/icon.svg" alt=""> Dreamnet</div>' +
-      '  <p class="muted">Your private dark romance studio.</p>' +
-      '  <label>Username<input name="username" autocomplete="username" value="admin" required></label>' +
-      '  <label>Password<input name="password" type="password" autocomplete="current-password" required autofocus></label>' +
+      '  <p class="muted">Your private dark romance studio. Adults 18+ only.</p>' +
+      '  <label>Username<input name="username" autocomplete="username" required autofocus></label>' +
+      '  <label>Password<input name="password" type="password" autocomplete="current-password" required></label>' +
       '  <p class="form-error" id="loginErr"></p>' +
-      '  <button class="btn primary wide">Unlock</button>' +
+      '  <button class="btn primary wide">Sign in</button>' +
+      '  <p class="muted auth-switch" id="toSignupRow" hidden>New here? <a href="#/signup" id="toSignup">Create a free account</a></p>' + legal +
       "</form>";
+    fetch("/api/signup-status").then(function (r) { return r.json(); }).then(function (st) {
+      if (st.open) document.getElementById("toSignupRow").hidden = false;
+    }).catch(function () {});
+    document.getElementById("toSignup").onclick = function (e) { e.preventDefault(); history.replaceState(null, "", "#/signup"); showLogin("signup"); };
     document.getElementById("loginForm").onsubmit = function (e) {
       e.preventDefault();
       var f = e.target;
@@ -596,7 +704,7 @@
         body: JSON.stringify({ username: f.username.value, password: f.password.value }),
       }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
         .then(function (res) {
-          if (!res.ok) { document.getElementById("loginErr").textContent = res.d.error || "Wrong password"; return; }
+          if (!res.ok) { document.getElementById("loginErr").textContent = res.d.error || "Wrong username or password"; return; }
           boot();
         });
     };
@@ -608,8 +716,9 @@
       '<div class="menu"><button class="btn small ghost" id="menuBtn">' + esc(state.me.username) + " ▾</button>" +
       '<div class="menu-list" id="menuList" hidden>' +
       (state.me.is_admin ? '<a href="/admin">Models &amp; usage</a>' : "") +
+      '<a href="/pricing">Pricing</a><a href="/trust">Trust &amp; safety</a>' +
       '<div class="theme-row"><button type="button" data-theme="midnight">Midnight</button><button type="button" data-theme="dusk">Dusk</button></div>' +
-      '<button id="logoutBtn">Lock</button></div></div>';
+      '<button id="logoutBtn">Sign out</button></div></div>';
     document.getElementById("menuBtn").onclick = function () {
       var l = document.getElementById("menuList"); l.hidden = !l.hidden;
     };
@@ -628,7 +737,7 @@
     });
     markTheme();
     document.getElementById("logoutBtn").onclick = function () {
-      fetch("/api/logout", { method: "POST", credentials: "same-origin" }).then(showLogin);
+      fetch("/api/logout", { method: "POST", credentials: "same-origin" }).then(function () { showLogin("login"); });
     };
   }
 

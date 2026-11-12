@@ -26,7 +26,26 @@ TTS_CACHE = Path(os.getenv("TTS_CACHE", "tts_cache"))
 VOICESTUDIO_URL = os.getenv("VOICESTUDIO_URL", "http://127.0.0.1:3900").rstrip("/")
 VOICESTUDIO_API_KEY = os.getenv("VOICESTUDIO_API_KEY", "")
 VOICESTUDIO_TIMEOUT = float(os.getenv("VOICESTUDIO_TIMEOUT", "300"))
-ENGINES = ("edge", "voicestudio")
+ENGINES = ("kokoro", "edge", "voicestudio")
+
+# Kokoro-82M (Apache-2.0): runs in the listener's browser through kokoro-js, so it
+# costs nothing per minute and the text never leaves their device. It's the default.
+# Edge's Read Aloud voices aren't licensed for a commercial service, so a hosted
+# Dreamnet turns them off unless EDGE_TTS_ALLOWED=1.
+HOSTED = os.getenv("DREAMNET_HOSTED", "") == "1"
+EDGE_ALLOWED = os.getenv("EDGE_TTS_ALLOWED", "0" if HOSTED else "1") == "1"
+DEFAULT_ENGINE = "kokoro"
+# Best-graded English voices from the kokoro-js voice table: (id, name, gender).
+KOKORO_VOICES = [
+    ("af_heart", "Heart · warm, natural", "female"), ("af_bella", "Bella · confident, rich", "female"),
+    ("af_nicole", "Nicole · soft, close", "female"), ("af_aoede", "Aoede · playful", "female"),
+    ("af_kore", "Kore · bright", "female"), ("af_sarah", "Sarah · gentle", "female"),
+    ("bf_emma", "Emma · British", "female"), ("bf_isabella", "Isabella · British", "female"),
+    ("am_michael", "Michael · calm", "male"), ("am_fenrir", "Fenrir · deep", "male"),
+    ("am_puck", "Puck · upbeat", "male"), ("bm_george", "George · British", "male"),
+    ("bm_fable", "Fable · British", "male"), ("bm_lewis", "Lewis · British, low", "male"),
+]
+KOKORO_DEFAULT = {"female": "af_heart", "male": "am_michael", "non-binary": "af_sky"}
 
 # Every voice reads English. English-speaking countries use their own English
 # voices; European countries use that country's voices reading the English text,
